@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Insert the savestate scan chain into the flattened md_core netlist (Yosys JSON).
 
-Every flip-flop gets   D' = ss_shift ? <previous chain bit> : (ss_hold ? Q : D)
+Every flip-flop gets   D' = ss_shift ? <previous chain bit> : D
+                       EN' = ss_shift | (~ss_hold & EN)      (EN = 1 for a plain $dff)
 so while ss_hold is high the whole board is frozen and with ss_shift it becomes one long
-shift register from ss_in to ss_out. Bits whose net name starts with "ssx_" belong to the
+shift register from ss_in to ss_out. Freezing through the register's clock enable costs
+no logic in front of each flip-flop (Cyclone V registers have a hardware enable); only the
+shift mux is added. The netlist must keep its clock enables ($dffe, dffunmap -srst-only). Bits whose net name starts with "ssx_" belong to the
 savestate logic itself (memory access) and are left untouched.
 
 The bits come out of ss_out sorted by register name (e.g. md_board.m68k.w529[3]), so the
@@ -55,13 +58,14 @@ def main():
 
     ss_hold, ss_shift, ss_in = port_bit('ss_hold'), port_bit('ss_shift'), port_bit('ss_in')
 
+    FF = ('$dff', '$dffe')
     bad = sorted({c['type'] for c in cells.values()
                   if ('dff' in c['type'] or 'latch' in c['type'] or c['type'] in ('$sr', '$aldff'))
-                  and c['type'] != '$dff'})
+                  and c['type'] not in FF})
     if bad:
-        sys.exit(f'unexpected storage cells (run dffunmap first?): {bad}')
+        sys.exit(f'unexpected storage cells (run dffunmap -srst-only first?): {bad}')
 
-    clocks = {tuple(c['connections']['CLK']) for c in cells.values() if c['type'] == '$dff'}
+    clocks = {tuple(c['connections']['CLK']) for c in cells.values() if c['type'] in FF}
     if len(clocks) != 1:
         sys.exit(f'expected a single clock, found {len(clocks)}')
 
@@ -84,7 +88,7 @@ def main():
 
     ffs = []
     for cname, cell in cells.items():
-        if cell['type'] != '$dff':
+        if cell['type'] not in FF:
             continue
         assert int(cell['parameters']['CLK_POLARITY'], 2) == 1
         for i, b in enumerate(cell['connections']['Q']):
@@ -104,27 +108,75 @@ def main():
         chain = b
     length = len(ffs)
 
+    def gate(kind, conn, ports_out='Y'):
+        y = new_bits(1)
+        w1 = format(1, '032b')
+        params = {'A_SIGNED': format(0, '032b'), 'A_WIDTH': w1, 'Y_WIDTH': w1}
+        dirs = {'A': 'input', 'Y': 'output'}
+        if 'B' in conn:
+            params.update({'B_SIGNED': format(0, '032b'), 'B_WIDTH': w1})
+            dirs['B'] = 'input'
+        conn = {k: [v] for k, v in conn.items()}
+        conn['Y'] = y
+        new_cells[f'$ss_{kind}{len(new_cells)}'] = {
+            'hide_name': 1, 'type': kind, 'parameters': params, 'attributes': {},
+            'port_directions': dirs, 'connections': conn,
+        }
+        return y[0]
+
     new_cells = {}
-    for name in sorted(n for n, c in cells.items() if c['type'] == '$dff'):
+    not_hold = gate('$not', {'A': ss_hold})
+    run = gate('$or', {'A': ss_shift, 'B': not_hold})        # enable of a plain $dff
+    enables = {}
+
+    def enable(cell):
+        if cell['type'] == '$dff':
+            return run
+        en = cell['connections']['EN'][0]
+        pol = int(cell['parameters']['EN_POLARITY'], 2)
+        if (en, pol) not in enables:
+            act = en if pol else gate('$not', {'A': en})
+            enables[(en, pol)] = gate('$or', {'A': ss_shift, 'B': gate('$and', {'A': not_hold, 'B': act})})
+        return enables[(en, pol)]
+
+    split = 0
+    for name in sorted(n for n, c in cells.items() if c['type'] in FF):
         cell = cells[name]
+        q = cell['connections']['Q']
+        idx = [i for i, b in enumerate(q) if b in prev]
+        if not idx:
+            continue
+        if len(idx) < len(q):
+            # a few bits of this register are savestate logic (ssx_): keep them in a cell of
+            # their own with the original clock enable
+            split += 1
+            rest = [i for i in range(len(q)) if i not in idx]
+            keep = json.loads(json.dumps(cell))
+            for p in ('D', 'Q'):
+                keep['connections'][p] = [cell['connections'][p][i] for i in rest]
+                cell['connections'][p] = [cell['connections'][p][i] for i in idx]
+            keep['parameters']['WIDTH'] = format(len(rest), '032b')
+            cell['parameters']['WIDTH'] = format(len(idx), '032b')
+            new_cells[f'{name}_ssx'] = keep
         d = cell['connections']['D']
         q = cell['connections']['Q']
         w = len(q)
-        held = [q[i] if q[i] in prev else d[i] for i in range(w)]
-        shifted = [prev[q[i]] if q[i] in prev else d[i] for i in range(w)]
-        if held == d:
-            continue
-        m1, m2 = new_bits(w), new_bits(w)
-        for tag, a, b, s, y in (('hold', d, held, ss_hold, m1), ('shift', m1, shifted, ss_shift, m2)):
-            new_cells[f'$ss_{tag}{name}'] = {
-                'hide_name': 1, 'type': '$mux',
-                'parameters': {'WIDTH': format(w, '032b')},
-                'attributes': {},
-                'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
-                'connections': {'A': a, 'B': b, 'S': [s], 'Y': y},
-            }
-        cell['connections']['D'] = m2
+        en = enable(cell)
+        m = new_bits(w)
+        new_cells[f'$ss_shift{name}'] = {
+            'hide_name': 1, 'type': '$mux',
+            'parameters': {'WIDTH': format(w, '032b')},
+            'attributes': {},
+            'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
+            'connections': {'A': d, 'B': [prev[b] for b in q], 'S': [ss_shift], 'Y': m},
+        }
+        cell['type'] = '$dffe'
+        cell['parameters']['EN_POLARITY'] = format(1, '032b')
+        cell['port_directions']['EN'] = 'input'
+        cell['connections']['D'] = m
+        cell['connections']['EN'] = [en]
     cells.update(new_cells)
+    print(f'clock enables: {len(enables)} distinct + 1, {split} registers split')
 
     # ss_out: drive from the end of the chain (the RTL ties it to ss_in)
     out = new_bits(1)

@@ -32,7 +32,7 @@ opt -fast
 memory_collect
 memory_share
 opt_clean
-dffunmap
+dffunmap -srst-only
 opt_clean
 check
 write_json $tmp/flat.json

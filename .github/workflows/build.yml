@@ -60,11 +60,12 @@ jobs:
         shell: bash
         run: |
           until [ -f build.rc ]; do sleep 30; done
-          grep -A8 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt 2>/dev/null |
-            grep -E "^; [^;]+; -?[0-9]" | sed 's/^/::notice::setup slack: /' || true
+          # worst slack per clock and corner, in the job log
+          cat output_files/MegaDrive.sta.summary 2>/dev/null || true
+          grep -E "Worst-case (setup|hold) slack is" build.log | sed 's/^/::notice::/' || true
           grep -q "Timing requirements not met" output_files/MegaDrive.sta.rpt 2>/dev/null &&
             echo "::warning::Timing requirements not met" || true
-          status timing "$(grep -A8 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt 2>/dev/null | grep -E "^; [^;]+; -?[0-9]" | head -4 | tr -s ' ' | tr '\n' ' ')"
+          status timing "$(grep -oE "Worst-case (setup|hold) slack is -?[0-9.]+" build.log | sed 's/Worst-case //; s/ slack is//' | tr '\n' ' ')"
           exit $(cat build.rc)
 
       # errors and the end of the log on the run page

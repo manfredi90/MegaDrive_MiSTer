@@ -1,0 +1,9 @@
+obj_rtl/
+obj_ss/
+obj_lib/
+*.bin
+*.hex
+*.ppm
+68k_ucode.txt
+68k_ncode.txt
+md_core_ss.vh

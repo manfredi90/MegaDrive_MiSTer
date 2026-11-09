@@ -1,7 +1,7 @@
 // Everything that runs on clk_md and holds emulated machine state: the Nuked-MD board plus
 // the external clock enables, bus-request pause and cheat data registers that used to live
 // in MegaDrive.sv. The savestate scan chain is inserted into this module as a whole
-// (see savestate/README.md), so any register added here is saved automatically.
+// (savestate/gen_netlist.sh), so any register added here is saved automatically.
 
 module md_core
 	(

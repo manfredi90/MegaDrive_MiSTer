@@ -73,8 +73,20 @@ module cartridge
 	input             fm_en,
 	output     [13:0] fm_audio,
 
-	output     [23:0] md_addr
+	output     [23:0] md_addr,
+
+	// savestate: mapper registers as 64-bit words (ss_we lasts at least one clk)
+	input       [3:0] ss_idx,
+	output reg [63:0] ss_rdata,
+	input      [63:0] ss_wdata,
+	input             ss_we,
+	output            ss_busy,      // an SDRAM access for the 68k/Z80 bus is in flight
+	output            ss_unsupported // SVP and Pier Solar keep state the savestate does not reach
 );
+
+wire ss_w0 = ss_we && ss_idx == 0;
+wire ss_w1 = ss_we && ss_idx == 1;
+wire ss_w2 = ss_we && ss_idx == 2;
 
 sdram sdram
 (
@@ -167,6 +179,8 @@ wire        rom_ack;
 wire [15:0] rom_data;
 reg         rom_rd;
 reg         dtack_ext;
+
+assign ss_busy = (rom_req != rom_ack) | rom_rd;
 
 always @(posedge clk_ram) begin
 	reg rd_old, we_old;
@@ -304,6 +318,11 @@ always @(posedge clk) begin
 		end
 		else if(~schan_quirk) md_bank_sram <= cart_data_wr[0];
 	end
+	if(ss_w0) begin
+		{md_bank[7], md_bank[6], md_bank[5], md_bank[4], md_bank[3], md_bank[2], md_bank[1], md_bank[0]} <= ss_wdata[47:0];
+		md_bank_sram <= ss_wdata[48];
+		md_bank_use  <= ss_wdata[49];
+	end
 end
 
 wire [24:1] md_cart_addr = realtec_quirk ? realtec_addr       :
@@ -401,6 +420,7 @@ always @(posedge clk) begin
 						else if (~cart_addr[20] &  cart_lwr &  cart_uwr) eeprom_bank <= ~cart_data_wr[0];
 		endcase
 	end
+	if(ss_w1) {eeprom_scl, eeprom_sdai, eeprom_bank} <= ss_wdata[30:28];
 end
 
 wire eeprom_sda = {eeprom_sdao & eeprom_sdai};
@@ -480,6 +500,7 @@ reg rom_prot;
 always @(posedge clk) begin
 	if(reset) rom_prot <= 1;
 	else if(schan_quirk && cart_lwr && cart_time && cart_addr[7:1] == 7'b1111000) rom_prot <= cart_data_wr[0];
+	if(ss_w0) rom_prot <= ss_wdata[50];
 end
 
 //JCART multitap
@@ -488,6 +509,7 @@ wire   jcart_cs = ~cart_ms && jcart_en && (cart_addr == 'h1C7FFF || cart_addr ==
 always @(posedge clk) begin
 	if(reset) jcart_th <= 1;
 	else if(cart_lwr & jcart_cs) jcart_th <= cart_data_wr[0];
+	if(ss_w0) jcart_th <= ss_wdata[51];
 end
 
 // MK3U Trilogy 10MB version (13MB isn't compatible with real HW!)
@@ -521,6 +543,7 @@ always @(posedge clk) begin
 			endcase
 		end
 	end
+	if(ss_w0) {realtec_mask, realtec_bank, realtec_boot} <= ss_wdata[62:52];
 end
 
 wire [23:1] realtec_addr = realtec_boot ? {11'b00000111111,cart_addr[12:1]} : {2'b00,(cart_addr[21:17] & realtec_mask) + realtec_bank,cart_addr[16:1]};
@@ -563,6 +586,7 @@ always @(posedge clk) begin
 				end
 		endcase
 	end
+	if(ss_w1) {sf004_first_page, sf004_bank_reg, sf004_sram_reg, sf002_bank_reg, sf001_bank_reg} <= ss_wdata[27:0];
 end
 
 wire [23:1] sf001_rom_a   = (sf001_bank_reg[7] && !cart_addr[21:18]) ? {6'b001110,cart_addr[17:1]} : {2'b00,cart_addr[21:1]};
@@ -631,6 +655,7 @@ reg boot_en;
 always @(posedge clk) begin
 	if(reset) boot_en <= 1;
 	else if(cart_lwr && ~iorq_n && !ms_addr[7:6] && !ms_addr[0]) boot_en <= 0;
+	if(ss_w1) boot_en <= ss_wdata[40];
 end
 
 wire ms_boot_cs = !ms_addr[15:14] && boot_en && cart_ms;
@@ -648,6 +673,7 @@ always @(posedge clk) begin
 	if (cart_oe && ~mreq_n) begin
 		last_read_addr <= ms_addr;
 	end
+	if(ss_w2) last_read_addr <= ss_wdata[15:0];
 end
 
 reg  [7:0] ms_bank[4];
@@ -655,10 +681,9 @@ reg  [7:0] ms_cfg;
 wire [1:0] ms_ram_e = ms_cfg[4:3];
 wire       ms_ram_p = ms_cfg[2];
 reg        ms_ram_c;
+reg        lock_mapper_B, mapper_codies_lock;
 
 always @(posedge clk) begin
-	reg lock_mapper_B, mapper_codies_lock;
-
 	if (reset) begin
 		ms_bank   <= '{0,1,2,3};
 		ms_cfg    <= 0;
@@ -711,6 +736,8 @@ always @(posedge clk) begin
 			end
 		end
 	end
+	if(ss_w1) {mapper_codies_lock, lock_mapper_B, mapper_codies, ms_ram_c, ms_cfg} <= {ss_wdata[55:53], ss_wdata[39:31]};
+	if(ss_w2) {ms_bank[3], ms_bank[2], ms_bank[1], ms_bank[0]} <= ss_wdata[47:16];
 end
 
 wire [21:0] ms_cart_addr;
@@ -754,6 +781,7 @@ always @(posedge clk) begin
 		fm_d <= cart_data_wr[7:0];
 		fm_a <= ms_addr[0];
 	end
+	if(ss_w1) {fm_a, fm_d} <= ss_wdata[49:41];
 end
 
 opll fm
@@ -774,6 +802,7 @@ reg [7:0] fm_det_data;
 always @(posedge clk) begin
 	if(fm_reset) fm_det_data <= 8'hFF;
 	else if(cart_lwr & fm_det_cs) fm_det_data[2:0] <= cart_data_wr[2:0];
+	if(ss_w1) fm_det_data[2:0] <= ss_wdata[52:50];
 end
 
 //---------------------- Cart detect ---------------------------------------
@@ -899,5 +928,20 @@ always @(posedge clk) begin
 end
 
 assign ym2612_quirk = fmbusy_quirk;
+assign ss_unsupported = svp_quirk | pier_quirk;
+
+//---------------------- Savestate ---------------------------------------
+
+always_comb begin
+	case(ss_idx)
+		0: ss_rdata = {1'b0, realtec_mask, realtec_bank, realtec_boot, jcart_th, rom_prot, md_bank_use, md_bank_sram,
+		               md_bank[7], md_bank[6], md_bank[5], md_bank[4], md_bank[3], md_bank[2], md_bank[1], md_bank[0]};
+		1: ss_rdata = {8'd0, mapper_codies_lock, lock_mapper_B, mapper_codies, fm_det_data[2:0], fm_a, fm_d, boot_en,
+		               ms_ram_c, ms_cfg, eeprom_scl, eeprom_sdai, eeprom_bank,
+		               sf004_first_page, sf004_bank_reg, sf004_sram_reg, sf002_bank_reg, sf001_bank_reg};
+		2: ss_rdata = {16'd0, ms_bank[3], ms_bank[2], ms_bank[1], ms_bank[0], last_read_addr};
+		default: ss_rdata = 0;
+	endcase
+end
 
 endmodule

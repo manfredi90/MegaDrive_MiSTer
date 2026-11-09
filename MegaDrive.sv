@@ -75,7 +75,7 @@ video_freak video_freak
 
 `include "build_id.v"
 localparam CONF_STR = {
-	"MegaDrive;UART31250,MIDI;",
+	"MegaDrive;SS3E000000:100000,UART31250,MIDI;",
 	"FS1,BINGENMD ;",
 	"FS2,SMS;",
 	"-;",
@@ -91,6 +91,10 @@ localparam CONF_STR = {
 	"O[13],Autosave,Off,On;",
 	"H6D0R[16],Load Backup RAM;",
 	"H6D0R[17],Save Backup RAM;",
+	"-;",
+	"O[65:64],Savestate Slot,1,2,3,4;",
+	"R[66],Save state;",
+	"R[67],Restore state;",
 	"-;",
 
 	"P1,Audio & Video;",
@@ -130,9 +134,27 @@ localparam CONF_STR = {
 	"-;",
 	"O[61],Pause When OSD is Open,No,Yes;",
 	"R[0],Reset;",
-	"J1,A,B,C,Start,Mode,X,Y,Z;",
+	"J1,A,B,C,Start,Mode,X,Y,Z,Savestates;",
 	"jn,A,B,R,Start,Select,X,Y,L;", // name map to SNES layout.
 	"jp,Y,B,A,Start,Select,L,X,R;", // positional map to SNES layout (3 button friendly)
+	"I,",
+	",",
+	",",
+	",",
+	",",
+	"Slot=DPAD|Save/Load=Start+DPAD,",
+	"Active Slot 1,",
+	"Active Slot 2,",
+	"Active Slot 3,",
+	"Active Slot 4,",
+	"Save to state 1,",
+	"Restore state 1,",
+	"Save to state 2,",
+	"Restore state 2,",
+	"Save to state 3,",
+	"Restore state 3,",
+	"Save to state 4,",
+	"Restore state 4;",
 	"V,v",`BUILD_DATE
 };
 
@@ -218,7 +240,7 @@ assign CLK_VIDEO = clk_53m_v;
 
 wire[127:0] status;
 wire  [1:0] buttons;
-wire [11:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
+wire [12:0] joystick_0,joystick_1,joystick_2,joystick_3,joystick_4;
 wire  [7:0] joy0_x,joy0_y,joy1_x,joy1_y;
 wire        ioctl_download;
 wire        ioctl_wr;
@@ -268,8 +290,8 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 	.new_vmode(new_vmode),
 
 	.status(status),
-	.status_in({status[127:8],region_req,status[5:0]}),
-	.status_set(region_set),
+	.status_in({status[127:66],ss_slot,status[63:8],region_set ? region_req : status[7:6],status[5:0]}),
+	.status_set(region_set | ss_status_update),
 	.status_menumask({tmss_loaded,status[13],en216p,!gun_mode,1'b0,status[8],~gg_available,~bk_ena}),
 
 	.ioctl_download(ioctl_download),
@@ -293,6 +315,9 @@ hps_io #(.CONF_STR(CONF_STR), .WIDE(1)) hps_io
 
 	.gamma_bus(gamma_bus),
 	.sdram_sz(sdram_sz),
+
+	.info_req(ss_info_req),
+	.info(ss_info),
 
 	.ps2_key(ps2_key),
 	.ps2_kbd_led_status(ps2_kbd_led_status),
@@ -377,33 +402,28 @@ always @(posedge clk_sys) begin
 	if(&sreset) sys_reset <= 1;
 end
 
-reg vclk_en, zclk_en, clk_en;
-reg vclk_r = 0, zclk_r = 0;
+reg clk_en;
+reg pause_req;
 always @(posedge clk_md) begin
 	clk_en <= ~cart_download;
-
-	// enables kept one clock ahead: the next clock value is then a 2-input AND of registers
-	if(VCLK & ~VCLK_next) vclk_en <= ~cart_download;
-	if(ZCLK & ~ZCLK_next) zclk_en <= ~cart_download;
-
-	vclk_r <= VCLK_next & vclk_en;
-	zclk_r <= ZCLK_next & zclk_en;
-end
-
-always @(posedge clk_md) begin
-	reg pause_req;
-
 	pause_req <= OSD_STATUS & status[61];
-
-	if(pause_req & ~md_reset & ~btn_reset & ~cart_download) begin
-		dma_z80_req <= 1;
-		if((dma_z80_ack | res_z80) & ~cart_dma) dma_68k_req <= 1;
-	end
-	else begin
-		dma_68k_req <= 0;
-		dma_z80_req <= 0;
-	end
 end
+
+// savestate signals (logic at the end of the file)
+wire        ss_hold, ss_shift, ss_in, ss_out, ss_refresh;
+wire        ss_mem_act, ss_mem_we;
+wire  [3:0] ss_mem_sel;
+wire [15:0] ss_mem_addr;
+wire [63:0] ss_mem_wdata, ss_core_rdata;
+wire        ss_sram = ss_mem_act & (ss_mem_sel == 4'd8);
+wire  [3:0] ss_cart_idx;
+wire [63:0] ss_cart_rdata, ss_cart_wdata;
+wire        ss_cart_we;
+wire        cart_ss_busy;
+wire        svp_or_pier;
+wire  [1:0] ss_slot;
+wire  [7:0] ss_info;
+wire        ss_info_req, ss_status_update;
 
 ///////////////////////////////////////////////////
 
@@ -473,20 +493,48 @@ wire [15:0] m68k_bus_do;
 wire [15:0] z80_addr;
 wire  [7:0] z80_bus_do;
 
-reg         dma_68k_req;
-reg         dma_z80_req;
-wire        dma_z80_ack;
-wire        res_z80;
+wire        dma_z80_req;
 
-wire        VCLK, ZCLK;
-wire        VCLK_next, ZCLK_next;
+wire        core_cart_cs, core_cart_oe, core_cart_lwr, core_cart_uwr, core_cart_time, core_cart_dma;
+wire  [6:0] core_PA_d, core_PA_o, core_PB_d, core_PB_o, core_PC_d, core_PC_o;
 
-md_board md_board
+// while a savestate holds the core its outputs are meaningless: keep the cartridge bus idle
+// and the pad lines at their last value
+assign cart_cs   = core_cart_cs   & ~ss_hold;
+assign cart_oe   = core_cart_oe   & ~ss_hold;
+assign cart_lwr  = core_cart_lwr  & ~ss_hold;
+assign cart_uwr  = core_cart_uwr  & ~ss_hold;
+assign cart_time = core_cart_time & ~ss_hold;
+assign cart_dma  = core_cart_dma  & ~ss_hold;
+
+reg [6:0] PA_d_r, PA_o_r, PB_d_r, PB_o_r, PC_d_r, PC_o_r;
+always @(posedge clk_md) if(~ss_hold) {PA_d_r, PA_o_r, PB_d_r, PB_o_r, PC_d_r, PC_o_r} <= {core_PA_d, core_PA_o, core_PB_d, core_PB_o, core_PC_d, core_PC_o};
+assign {PA_d, PA_o, PB_d, PB_o, PC_d, PC_o} = ss_hold ? {PA_d_r, PA_o_r, PB_d_r, PB_o_r, PC_d_r, PC_o_r} :
+                                                        {core_PA_d, core_PA_o, core_PB_d, core_PB_o, core_PC_d, core_PC_o};
+
+// Nuked-MD board and its clk_md glue, flattened with the savestate scan chain
+// (rtl/md_core_ss.v, generated from rtl/md_core.v by savestate/gen_netlist.sh)
+md_core md_core
 (
 	.MCLK2(clk_md),
 
+	.ss_hold(ss_hold),
+	.ss_shift(ss_shift),
+	.ss_in(ss_in),
+	.ss_out(ss_out),
+	.ss_refresh(ss_refresh),
+	.ss_mem_act(ss_mem_act),
+	.ss_mem_sel(ss_mem_sel),
+	.ss_mem_addr(ss_mem_addr),
+	.ss_mem_we(ss_mem_we),
+	.ss_mem_wdata(ss_mem_wdata),
+	.ss_mem_rdata(ss_core_rdata),
+
 	.ext_reset(md_reset),
 	.reset_button(btn_reset), // edge triggered, requires some activity time to get detected.
+	.clk_stop(cart_download),
+	.pause_req(pause_req),
+	.pause_allow(~md_reset & ~btn_reset & ~cart_download),
 
 	// ram
 	.ram_68k_address(ram_68k_address),
@@ -502,22 +550,14 @@ md_board md_board
 	// cheat engine
 	.m68k_addr(m68k_addr),
 	.m68k_bus_do(m68k_bus_do),
-	.m68k_di(m68k_data),
+	.m68k_genie_data(m68k_genie_data),
 	.z80_addr(z80_addr),
 	.z80_bus_do(z80_bus_do),
-	.z80_di(z80_data),
+	.z80_genie_data(z80_genie_data),
 
 	.tmss_enable(tmss_enable & tmss_loaded),
 	.tmss_data(tmss_data),
 	.tmss_address(tmss_address),
-
-	.ext_VCLK_o(VCLK),
-	.ext_ZCLK_o(ZCLK),
-	.ext_VCLK_next(VCLK_next),
-	.ext_ZCLK_next(ZCLK_next),
-	.ext_VCLK_i(vclk_r),
-	.ext_VCLK_i_next(VCLK_next & vclk_en),
-	.ext_ZCLK_i(zclk_r),
 
 	// cart
 	.M3(~cart_ms),
@@ -525,15 +565,13 @@ md_board md_board
 	.cart_data(cart_data),
 	.cart_data_en(cart_data_en),
 	.cart_data_wr(cart_data_wr),
-	.cart_cs(cart_cs),
-	//.cart_oe(cart_oe),
-	.vdp_dma_oe_early(cart_oe),
-	.cart_lwr(cart_lwr),
-	.cart_uwr(cart_uwr),
-	.cart_time(cart_time),
+	.cart_cs(core_cart_cs),
+	.cart_oe(core_cart_oe),
+	.cart_lwr(core_cart_lwr),
+	.cart_uwr(core_cart_uwr),
+	.cart_time(core_cart_time),
 	.cart_m3_pause(joystick_0[7] | joystick_1[7] | joystick_2[7] | joystick_3[7] | joystick_4[7]),
-	//.cart_dma(cart_dma),
-	.vdp_dma(cart_dma),
+	.cart_dma(core_cart_dma),
 	.ext_dtack(cart_dtack),
 	.pal(PAL),
 	.jap(JAP),
@@ -544,7 +582,7 @@ md_board md_board
 	.V_B(b),
 	.V_HS(hs),
 	.vdp_vsync2(vs),
-	
+
 	// audio
 	.MOL(MOL),
 	.MOR(MOR),
@@ -556,14 +594,14 @@ md_board md_board
 
 	// pads
 	.PA_i(PA_i),
-	.PA_o(PA_o),
-	.PA_d(PA_d), // 1 - input, 0 - output
+	.PA_o(core_PA_o),
+	.PA_d(core_PA_d), // 1 - input, 0 - output
 	.PB_i(PB_i),
-	.PB_o(PB_o),
-	.PB_d(PB_d),
+	.PB_o(core_PB_o),
+	.PB_d(core_PB_d),
 	.PC_i(PC_i),
-	.PC_o(PC_o),
-	.PC_d(PC_d),
+	.PC_o(core_PC_o),
+	.PC_d(core_PC_d),
 
 	// helpers
 	.vdp_hclk1(vdp_hclk1),
@@ -575,11 +613,9 @@ md_board md_board
 	.vdp_rs1(vdp_rs1),
 	.vdp_cramdot_dis(~status[10]),
 	.ym2612_status_enable(ym2612_quirk),
-	
-	.dma_68k_req(dma_68k_req),
-	.dma_z80_req(dma_z80_req),
-	.dma_z80_ack(dma_z80_ack),
-	.res_z80(res_z80)
+
+	.dma_68k_req(),
+	.dma_z80_req(dma_z80_req)
 );
 
 dpram #(15,16) ram_68k
@@ -672,10 +708,10 @@ cartridge cartridge
 	.cart_dtack(cart_dtack_rom),
 	.cart_dma(cart_dma),
 
-	.save_addr({sd_lba[6:0],sd_buff_addr}),
-	.save_di(sd_buff_dout),
+	.save_addr(ss_sram ? ss_mem_addr : {sd_lba[6:0],sd_buff_addr}),
+	.save_di(ss_sram ? ss_mem_wdata[15:0] : sd_buff_dout),
 	.save_do(sd_buff_din),
-	.save_wr(sd_buff_wr & sd_ack),
+	.save_wr(ss_sram ? ss_mem_we : (sd_buff_wr & sd_ack)),
 	.save_change(bk_change),
 
 	.jcart_en(status[39]),
@@ -688,7 +724,14 @@ cartridge cartridge
 	.ym2612_quirk(ym2612_quirk),
 
 	.fm_en(~status[60]),
-	.fm_audio(sms_fm_audio)
+	.fm_audio(sms_fm_audio),
+
+	.ss_idx(ss_cart_idx),
+	.ss_rdata(ss_cart_rdata),
+	.ss_wdata(ss_cart_wdata),
+	.ss_we(ss_cart_we),
+	.ss_busy(cart_ss_busy),
+	.ss_unsupported(svp_or_pier)
 );
 
 
@@ -761,22 +804,27 @@ md_plus md_plus
 // CDDA audio output from mdp_audio
 wire signed [15:0] cdda_l, cdda_r;
 
+wire        mdp_ddr_busy, mdp_ddr_dout_ready, mdp_ddr_rd, mdp_ddr_we;
+wire  [7:0] mdp_ddr_burstcnt, mdp_ddr_be;
+wire [28:0] mdp_ddr_addr;
+wire [63:0] mdp_ddr_dout, mdp_ddr_din;
+
 mdp_audio mdp_audio
 (
 	.clk(clk_sys),
 	.reset(sys_reset),
 
-	// DDRAM interface
+	// DDRAM interface (shared with the savestates)
 	.DDRAM_CLK(DDRAM_CLK),
-	.DDRAM_BUSY(DDRAM_BUSY),
-	.DDRAM_BURSTCNT(DDRAM_BURSTCNT),
-	.DDRAM_ADDR(DDRAM_ADDR),
-	.DDRAM_DOUT(DDRAM_DOUT),
-	.DDRAM_DOUT_READY(DDRAM_DOUT_READY),
-	.DDRAM_RD(DDRAM_RD),
-	.DDRAM_DIN(DDRAM_DIN),
-	.DDRAM_BE(DDRAM_BE),
-	.DDRAM_WE(DDRAM_WE),
+	.DDRAM_BUSY(mdp_ddr_busy),
+	.DDRAM_BURSTCNT(mdp_ddr_burstcnt),
+	.DDRAM_ADDR(mdp_ddr_addr),
+	.DDRAM_DOUT(mdp_ddr_dout),
+	.DDRAM_DOUT_READY(mdp_ddr_dout_ready),
+	.DDRAM_RD(mdp_ddr_rd),
+	.DDRAM_DIN(mdp_ddr_din),
+	.DDRAM_BE(mdp_ddr_be),
+	.DDRAM_WE(mdp_ddr_we),
 
 	// Ring buffer pointers (from/to hps_ext)
 	.active(mdp_audio_active),
@@ -831,7 +879,7 @@ reg        vh_ph, vh_h1d;
 always @(posedge clk_md) begin
 	vh_h1d <= vdp_hclk1;
 	vh_ph <= ~vh_ph & (vh_h1d == vdp_hclk1);
-	if(vh_ph) {vh_r, vh_g, vh_b, vh_hs, vh_vs, vh_hclk1, vh_de_h, vh_de_v, vh_intfield, vh_m2, vh_m5, vh_rs1}
+	if(vh_ph & ~ss_hold) {vh_r, vh_g, vh_b, vh_hs, vh_vs, vh_hclk1, vh_de_h, vh_de_v, vh_intfield, vh_m2, vh_m5, vh_rs1}
 		<= {r, g, b, hs, vs, vdp_hclk1, vdp_de_h, vdp_de_v, vdp_intfield, vdp_m2, vdp_m5, vdp_rs1};
 end
 
@@ -910,7 +958,7 @@ audio_cond audio_cond
 (
 	.clk(clk_sys),
 	.reset(sys_reset),
-	.mute(~clk_en | dma_z80_req),
+	.mute(~clk_en | dma_z80_req | ss_hold),
 
 	.lpf_mode(status[15:14]),
 	.fm_mode(status[11]),
@@ -1312,9 +1360,6 @@ always_ff @(posedge clk_sys) begin
 	end
 end
 
-reg [15:0] m68k_data;
-always @(posedge clk_md) m68k_data <= m68k_genie_data;
-
 wire [15:0] m68k_genie_data;
 CODES #(.ADDR_WIDTH(24), .DATA_WIDTH(16), .BIG_ENDIAN(1)) codes_68k
 (
@@ -1328,9 +1373,6 @@ CODES #(.ADDR_WIDTH(24), .DATA_WIDTH(16), .BIG_ENDIAN(1)) codes_68k
 	.data_out(m68k_genie_data)
 );
 
-reg [7:0] z80_data;
-always @(posedge clk_md) z80_data <= z80_genie_data;
-
 wire [7:0] z80_genie_data;
 CODES #(.ADDR_WIDTH(16), .DATA_WIDTH(8)) codes_z80
 (
@@ -1341,6 +1383,136 @@ CODES #(.ADDR_WIDTH(16), .DATA_WIDTH(8)) codes_z80
 	.addr_in(z80_addr),
 	.data_in(z80_bus_do),
 	.data_out(z80_genie_data)
+);
+
+
+/////////////////////////  SAVESTATES  /////////////////////////////
+
+wire        ss_save, ss_load;
+wire        ss_busy;
+wire        ddr_req, ddr_ack, ddr_we;
+wire [28:0] ddr_addr;
+wire [63:0] ddr_wdata, ddr_rdata;
+
+// a cartridge has been loaded since power on
+reg rom_loaded = 0;
+always @(posedge clk_sys) begin
+	reg old_dl;
+	old_dl <= cart_download;
+	if(old_dl & ~cart_download) rom_loaded <= 1;
+end
+
+// the core may be frozen when nothing is on the cartridge bus and the SDRAM is idle
+wire        ss_safe = ~(core_cart_cs | core_cart_oe | core_cart_lwr | core_cart_uwr | core_cart_time) & ~cart_ss_busy
+                      & ~md_reset & ~btn_reset & ~cart_download & ~bk_state;
+
+// the UI pulses are on clk_sys: carry them over to clk_md as toggles
+reg ss_save_t = 0, ss_load_t = 0;
+always @(posedge clk_sys) begin
+	if(ss_save) ss_save_t <= ~ss_save_t;
+	if(ss_load) ss_load_t <= ~ss_load_t;
+end
+
+reg ss_save_md, ss_load_md;
+always @(posedge clk_md) begin
+	reg [1:0] save_s, load_s;
+	save_s <= {save_s[0], ss_save_t};
+	load_s <= {load_s[0], ss_load_t};
+	ss_save_md <= save_s[1] ^ save_s[0];
+	ss_load_md <= load_s[1] ^ load_s[0];
+end
+
+ss_ctrl ss_ctrl
+(
+	.clk(clk_md),
+	.reset(md_reset),
+
+	.save(ss_save_md),
+	.load(ss_load_md),
+	.slot(ss_slot),
+	.allow(rom_loaded & ~svp_or_pier),
+	.safe(ss_safe),
+	.busy(ss_busy),
+
+	.ss_hold(ss_hold),
+	.ss_shift(ss_shift),
+	.ss_in(ss_in),
+	.ss_out(ss_out),
+	.ss_refresh(ss_refresh),
+	.ss_mem_act(ss_mem_act),
+	.ss_mem_sel(ss_mem_sel),
+	.ss_mem_addr(ss_mem_addr),
+	.ss_mem_we(ss_mem_we),
+	.ss_mem_wdata(ss_mem_wdata),
+	.ss_mem_rdata((ss_mem_sel == 4'd8) ? {48'd0, sd_buff_din} : ss_core_rdata),
+
+	.cart_idx(ss_cart_idx),
+	.cart_rdata(ss_cart_rdata),
+	.cart_wdata(ss_cart_wdata),
+	.cart_we(ss_cart_we),
+
+	.ddr_req(ddr_req),
+	.ddr_ack(ddr_ack),
+	.ddr_we(ddr_we),
+	.ddr_addr(ddr_addr),
+	.ddr_wdata(ddr_wdata),
+	.ddr_rdata(ddr_rdata)
+);
+
+ss_ddr ss_ddr
+(
+	.clk(clk_sys),
+
+	.ss_busy(ss_busy),
+	.ss_req(ddr_req),
+	.ss_ack(ddr_ack),
+	.ss_we(ddr_we),
+	.ss_addr(ddr_addr),
+	.ss_wdata(ddr_wdata),
+	.ss_rdata(ddr_rdata),
+
+	.a_BUSY(mdp_ddr_busy),
+	.a_BURSTCNT(mdp_ddr_burstcnt),
+	.a_ADDR(mdp_ddr_addr),
+	.a_DOUT(mdp_ddr_dout),
+	.a_DOUT_READY(mdp_ddr_dout_ready),
+	.a_RD(mdp_ddr_rd),
+	.a_DIN(mdp_ddr_din),
+	.a_BE(mdp_ddr_be),
+	.a_WE(mdp_ddr_we),
+
+	.DDRAM_BUSY(DDRAM_BUSY),
+	.DDRAM_BURSTCNT(DDRAM_BURSTCNT),
+	.DDRAM_ADDR(DDRAM_ADDR),
+	.DDRAM_DOUT(DDRAM_DOUT),
+	.DDRAM_DOUT_READY(DDRAM_DOUT_READY),
+	.DDRAM_RD(DDRAM_RD),
+	.DDRAM_DIN(DDRAM_DIN),
+	.DDRAM_BE(DDRAM_BE),
+	.DDRAM_WE(DDRAM_WE)
+);
+
+// OSD, gamepad (Savestates button + Start + D-pad). The keyboard is left out: F1-F3 already
+// switch the region in this core.
+savestate_ui #(.INFO_TIMEOUT_BITS(25)) savestate_ui
+(
+	.clk            (clk_sys),
+	.ps2_key        (11'd0),
+	.allow_ss       (rom_loaded & ~svp_or_pier),
+	.joySS          (joystick_0[12]),
+	.joyRight       (joystick_0[0]),
+	.joyLeft        (joystick_0[1]),
+	.joyDown        (joystick_0[2]),
+	.joyUp          (joystick_0[3]),
+	.joyStart       (joystick_0[7]),
+	.status_slot    (status[65:64]),
+	.OSD_saveload   (status[67:66]),
+	.ss_save        (ss_save),
+	.ss_load        (ss_load),
+	.ss_info_req    (ss_info_req),
+	.ss_info        (ss_info),
+	.statusUpdate   (ss_status_update),
+	.selected_slot  (ss_slot)
 );
 
 endmodule

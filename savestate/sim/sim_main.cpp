@@ -228,7 +228,9 @@ struct Sim {
 	{
 		// the save port reaches the first 32K words (64 KB) of the backup RAM
 		for (int i = 0; i < 32768; i++) top->rootp->tb->sram[i] = rng();
-		for (int i = 0; i < 3; i++) top->rootp->tb->cart_regs[i] = rng();
+		// only the bits the cartridge defines (savestate/layout_fixed.txt)
+		static const uint64_t used[3] = { (1ULL << 63) - 1, (1ULL << 56) - 1, (1ULL << 48) - 1 };
+		for (int i = 0; i < 3; i++) top->rootp->tb->cart_regs[i] = rng() & used[i];
 	}
 
 	bool cart_equal(const Sim &o) const

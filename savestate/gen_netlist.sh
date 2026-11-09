@@ -30,6 +30,7 @@ flatten
 opt_clean
 opt -fast
 memory_collect
+memory_share
 opt_clean
 dffunmap
 opt_clean

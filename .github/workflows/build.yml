@@ -34,6 +34,9 @@ jobs:
         shell: bash
         run: |
           grep -E "^Error( \(|:)" build.log | head -20 | sed 's/^/::error::/' || true
+          # the rest goes into single multi-line annotations (there is a cap per step)
+          echo "::notice title=errors and critical warnings::$(grep -iE "error|critical warning" build.log | grep -v "0 errors" | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+          echo "::notice title=end of log::$(tail -40 build.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
           grep -E "Logic utilization|Total registers|Total block memory bits|Total RAM Blocks|Total DSP" \
             output_files/MegaDrive.fit.summary 2>/dev/null | sed 's/^/::notice::fit: /' || true
           grep -A8 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt 2>/dev/null |

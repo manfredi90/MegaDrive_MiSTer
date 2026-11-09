@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04   # Yosys 0.33, as used to develop the netlist script
-    timeout-minutes: 240
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
 
@@ -24,28 +24,48 @@ jobs:
           yosys -V
           sh savestate/gen_netlist.sh 2>&1 | tee gen.log || { echo "::error title=gen_netlist::$(tail -30 gen.log | awk '{printf "%s%%0A", $0}')"; exit 1; }
 
-      - name: Compile
-        shell: bash
+      # Quartus runs in the background; the next steps wait for each stage and put its
+      # results on the run page as annotations, so they show up while the build goes on
+      - name: Start Quartus
         run: |
-          set -o pipefail
-          docker run --rm -v "$PWD":/build -w /build theypsilon/quartus-lite-c5:17.0.2.docker0 \
-            /opt/intelFPGA_lite/quartus/bin/quartus_sh --flow compile MegaDrive.qpf | tee build.log
+          docker run -d --name quartus -v "$PWD":/build -w /build theypsilon/quartus-lite-c5:17.0.2.docker0 \
+            sh -c '/opt/intelFPGA_lite/quartus/bin/quartus_sh --flow compile MegaDrive.qpf > build.log 2>&1; echo $? > build.rc'
 
-      # errors, resource use and timing also go to the run page as annotations
-      - name: Summary
-        if: always()
+      - name: Synthesis
         shell: bash
         run: |
-          grep -E "^Error( \(|:)" build.log | head -20 | sed 's/^/::error::/' || true
-          # the rest goes into single multi-line annotations (there is a cap per step)
-          echo "::notice title=errors and critical warnings::$(grep -iE "error|critical warning" build.log | grep -v "0 errors" | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
-          echo "::notice title=end of log::$(tail -40 build.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+          until [ -f output_files/MegaDrive.map.summary ] || [ -f build.rc ]; do sleep 20; done
+          sleep 5
+          grep -E "Total logic elements|Total registers|Total block memory bits|Total RAM Blocks" \
+            output_files/MegaDrive.map.summary 2>/dev/null | sed 's/^/::notice::synthesis: /' || true
+          [ ! -f build.rc ] || [ "$(cat build.rc)" = 0 ] || [ -f output_files/MegaDrive.fit.summary ] || exit 1
+
+      - name: Fitter
+        shell: bash
+        run: |
+          until [ -f output_files/MegaDrive.fit.summary ] || [ -f build.rc ]; do sleep 30; done
+          sleep 5
           grep -E "Logic utilization|Total registers|Total block memory bits|Total RAM Blocks|Total DSP" \
             output_files/MegaDrive.fit.summary 2>/dev/null | sed 's/^/::notice::fit: /' || true
+
+      - name: Timing and result
+        shell: bash
+        run: |
+          until [ -f build.rc ]; do sleep 30; done
           grep -A8 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt 2>/dev/null |
             grep -E "^; [^;]+; -?[0-9]" | sed 's/^/::notice::setup slack: /' || true
           grep -q "Timing requirements not met" output_files/MegaDrive.sta.rpt 2>/dev/null &&
             echo "::warning::Timing requirements not met" || true
+          exit $(cat build.rc)
+
+      # errors and the end of the log on the run page
+      - name: Log
+        if: always()
+        shell: bash
+        run: |
+          grep -E "^Error( \(|:)" build.log | head -20 | sed 's/^/::error::/' || true
+          echo "::notice title=errors and critical warnings::$(grep -iE "error|critical warning" build.log | grep -v "0 errors" | head -40 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
+          echo "::notice title=end of log::$(tail -40 build.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')"
           cat output_files/MegaDrive.fit.summary 2>/dev/null || true
 
       # files laid out as on the SD card: the core, the converter and every layout map

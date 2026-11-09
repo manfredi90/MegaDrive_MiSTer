@@ -27,6 +27,14 @@
 module fc1004
 	(
 	input MCLK,
+	// savestate
+	input ss_hold,
+	input ss_mem_act,
+	input [3:0] ss_mem_sel,
+	input [6:0] ss_mem_addr,
+	input ss_mem_we,
+	input [55:0] ss_mem_wdata,
+	output [55:0] ssx_vdp_rdata,
 	input MCLK_e,
 	input [7:0] SD,
 	output SE1,
@@ -295,6 +303,13 @@ module fc1004
 	
 	ym7101 vdp(
 		.MCLK(MCLK),
+		.ss_hold(ss_hold),
+		.ss_mem_act(ss_mem_act),
+		.ss_mem_sel(ss_mem_sel),
+		.ss_mem_addr(ss_mem_addr[6:0]),
+		.ss_mem_we(ss_mem_we),
+		.ss_mem_wdata(ss_mem_wdata[55:0]),
+		.ssx_vdp_rdata(ssx_vdp_rdata),
 		.MCLK_e(MCLK_e),
 		.SD(SD),
 		.SE1(SE1),

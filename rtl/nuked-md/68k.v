@@ -26,6 +26,8 @@
 module m68kcpu
 	(
 	input MCLK,
+	input ss_hold,    // savestate: freeze ROM read register
+	input ss_refresh, // savestate: reload ROM read register from shadow address
 	input CLK,
 	input CLK_n,
 	input VPA,
@@ -633,8 +635,7 @@ module m68kcpu
 	reg [67:0] w529;
 	//reg [271:0] ucode[0:33];
 	//reg [271:0] ncode[0:83];
-	(* ramstyle = "M10K" *) reg [271:0] ucode[0:63];
-	(* ramstyle = "M10K" *) reg [271:0] ncode[0:255];
+
 	reg [15:0] w530;
 	wire [170:0] a0_pla;
 	reg [164:20] a0_pla_mem;
@@ -1184,8 +1185,6 @@ module m68kcpu
 	
 	initial
 	begin
-		$readmemb("68k_ucode.txt", ucode);
-		$readmemb("68k_ncode.txt", ncode);
 		
 		w259[0] = 4'h0;
 		w259[1] = 4'h0;
@@ -3412,8 +3411,23 @@ module m68kcpu
 	
 	wire [9:0] code_addr = { w504, w503, w490, w489, w501, w502, w495, w500, w505, w506 };
 	
-	reg [271:0] ucode_out;
-	reg [271:0] ncode_out;
+	wire [271:0] ucode_out;
+	wire [271:0] ncode_out;
+	
+	// savestate: the microcode ROM read registers live inside the M10K blocks and are not
+	// scanned; ss_ua/ss_na remember the address of the last read so it can be replayed.
+	reg [5:0] ss_ua = 6'h0;
+	reg [7:0] ss_na = 8'h0;
+	
+	m68k_microrom microrom
+		(
+		.MCLK(MCLK),
+		.en((c3 & ~ss_hold) | ss_refresh),
+		.ucode_addr(ss_refresh ? ss_ua : ucode_addr),
+		.ncode_addr(ss_refresh ? ss_na : ncode_addr),
+		.ucode_out(ucode_out),
+		.ncode_out(ncode_out)
+		);
 	
 	wire [67:0] ucode_out_m1_0;
 	wire [67:0] ucode_out_m1_1;
@@ -3610,8 +3624,8 @@ module m68kcpu
 		
 		if (c3)
 		begin
-			ucode_out <= ucode[ucode_addr];
-			ncode_out <= ncode[ncode_addr];
+			ss_ua <= ucode_addr;
+			ss_na <= ncode_addr;
 		end
 		
 		if (c3)
@@ -6550,3 +6564,4 @@ module m68kcpu
 	end
 	
 endmodule
+

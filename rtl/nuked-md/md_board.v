@@ -29,6 +29,17 @@ module md_board
 	(
 	// input MCLK,
 	input MCLK2,
+	// savestate: ss_hold freezes the board, ss_shift moves the scan chain (inserted by the
+	// savestate netlist script), ss_refresh replays the address of every RAM/ROM with an
+	// internal address register, ss_mem_* reads and writes the memories while held.
+	input ss_hold,
+	input ss_refresh,
+	input ss_mem_act,
+	input [3:0] ss_mem_sel,
+	input [15:0] ss_mem_addr,
+	input ss_mem_we,
+	input [63:0] ss_mem_wdata,
+	output reg [63:0] ssx_rdata,
 	input ext_reset,
 	input reset_button,
 	input ext_vres,
@@ -307,9 +318,40 @@ module md_board
 		MCLK_e <= ~MCLK_e;
 	end
 	
+	wire [55:0] ssx_vdp_rdata;
+	wire [7:0] ssx_vram_rdata;
+	reg [15:0] ssx_ram68_q;
+	reg [7:0] ssx_ramz_q;
+	reg [3:0] ssx_sel1, ssx_sel2;
+	
+	always @(posedge MCLK2)
+	begin
+		ssx_sel1 <= ss_mem_sel;
+		ssx_sel2 <= ssx_sel1;
+		ssx_ram68_q <= ram_68k_o;
+		ssx_ramz_q <= ram_z80_o;
+	end
+	
+	always @(*)
+	begin
+		case (ssx_sel2)
+			4'd5: ssx_rdata = { 56'h0, ssx_vram_rdata };
+			4'd6: ssx_rdata = { 48'h0, ssx_ram68_q };
+			4'd7: ssx_rdata = { 56'h0, ssx_ramz_q };
+			default: ssx_rdata = { 8'h0, ssx_vdp_rdata };
+		endcase
+	end
+	
 	fc1004 ym
 		(
 		.MCLK(MCLK2),
+		.ss_hold(ss_hold),
+		.ss_mem_act(ss_mem_act),
+		.ss_mem_sel(ss_mem_sel),
+		.ss_mem_addr(ss_mem_addr[6:0]),
+		.ss_mem_we(ss_mem_we),
+		.ss_mem_wdata(ss_mem_wdata[55:0]),
+		.ssx_vdp_rdata(ssx_vdp_rdata),
 		.MCLK_e(MCLK_e),
 		.SD(SD),
 		.SE1(SE1),
@@ -490,7 +532,7 @@ module md_board
 		.DAC_ch_index(DAC_ch_index),
 		.tmss_enable(tmss_enable),
 		.tmss_data(tmss_data),
-		.tmss_address(tmss_address),
+		.tmss_address(tmss_address_fn),
 		.vdp_hsync2(vdp_hsync2),
 		.vdp_vsync2(vdp_vsync2),
 		.ym2612_status_enable(ym2612_status_enable),
@@ -533,6 +575,8 @@ module md_board
 	m68kcpu m68k
 		(
 		.MCLK(MCLK2),
+		.ss_hold(ss_hold),
+		.ss_refresh(ss_refresh),
 `ifndef EXT_CLOCKS
 		.CLK(VCLK),
 		.CLK_n(~VCLK_d & VCLK_next_o),
@@ -640,6 +684,13 @@ module md_board
 	vram vram1
 		(
 		.MCLK(MCLK2),
+		.ss_hold(ss_hold),
+		.ss_refresh(ss_refresh),
+		.ss_mem_en(ss_mem_act & (ss_mem_sel == 4'd5)),
+		.ss_mem_addr(ss_mem_addr),
+		.ss_mem_we(ss_mem_we),
+		.ss_mem_wdata(ss_mem_wdata[7:0]),
+		.ssx_vram_rdata(ssx_vram_rdata),
 		.RAS(RAS1),
 		.CAS(CAS1),
 		.WE(WE0),
@@ -678,14 +729,34 @@ module md_board
 		);
 `endif
 	
-	assign ram_68k_address = { VA[14], IA14, VA[12:0] };
-	assign ram_68k_byteena = { ~UWR, ~LWR };
-	assign ram_68k_data = VD;
-	assign ram_68k_wren = (~UWR | ~LWR) & ~RAS0;
+	// External RAMs/ROM register their address internally: keep a copy (ss_*_a) so the read
+	// output can be replayed after a restore, and give the savestate controller access.
+	wire [14:0] ram_68k_address_fn = { VA[14], IA14, VA[12:0] };
+	wire [12:0] ram_z80_address_fn = ZA[12:0];
+	wire [9:0] tmss_address_fn;
+	reg [14:0] ss_ram68_a = 15'h0;
+	reg [12:0] ss_ramz_a = 13'h0;
+	reg [9:0] ss_tmss_a = 10'h0;
+	wire ss_ram68 = ss_mem_act & (ss_mem_sel == 4'd6);
+	wire ss_ramz = ss_mem_act & (ss_mem_sel == 4'd7);
 	
-	assign ram_z80_address = ZA[12:0];
-	assign ram_z80_data = ZD;
-	assign ram_z80_wren = ~ZRAM & ~ZWR;
+	always @(posedge MCLK2)
+	begin
+		ss_ram68_a <= ram_68k_address_fn;
+		ss_ramz_a <= ram_z80_address_fn;
+		ss_tmss_a <= tmss_address_fn;
+	end
+	
+	assign ram_68k_address = ss_ram68 ? ss_mem_addr[14:0] : ss_refresh ? ss_ram68_a : ram_68k_address_fn;
+	assign ram_68k_byteena = ss_ram68 ? 2'b11 : { ~UWR, ~LWR };
+	assign ram_68k_data = ss_ram68 ? ss_mem_wdata[15:0] : VD;
+	assign ram_68k_wren = ss_ram68 ? ss_mem_we : ((~UWR | ~LWR) & ~RAS0 & ~ss_hold);
+	
+	assign ram_z80_address = ss_ramz ? ss_mem_addr[12:0] : ss_refresh ? ss_ramz_a : ram_z80_address_fn;
+	assign ram_z80_data = ss_ramz ? ss_mem_wdata[7:0] : ZD;
+	assign ram_z80_wren = ss_ramz ? ss_mem_we : (~ZRAM & ~ZWR & ~ss_hold);
+	
+	assign tmss_address = ss_refresh ? ss_tmss_a : tmss_address_fn;
 	
 	//wire [14:0] ram_68k_address = { VA[14], IA14, VA[12:0] };
 	//

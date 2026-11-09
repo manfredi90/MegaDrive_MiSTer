@@ -10,6 +10,14 @@ module vram
 	input [7:0] AD,
 	input [7:0] RD_i,
 	output reg [7:0] RD_o,
+	// savestate
+	input ss_hold,
+	input ss_refresh,
+	input ss_mem_en,
+	input [15:0] ss_mem_addr,
+	input ss_mem_we,
+	input [7:0] ss_mem_wdata,
+	output reg [7:0] ssx_vram_rdata,
 	output RD_d,
 	output [7:0] SD_o,
 	output SD_d
@@ -30,7 +38,13 @@ module vram
 	wire wr = ~RAS & ~CAS & ~WE;
 	wire rd = ~RAS & ~CAS & ~OE & ~dt;
 	
-	wire [7:0] mem_addr = addr[15:8];
+	// savestate: the RAM blocks register their address internally, ss_row keeps a copy
+	// so the read output can be rebuilt after a restore.
+	reg [7:0] ss_row = 8'h0;
+	reg [7:0] ssx_bsel;
+	wire [7:0] slice_sel = ss_mem_en ? ssx_bsel : addr[7:0];
+	
+	wire [7:0] mem_addr = ss_mem_en ? ss_mem_addr[15:8] : ss_refresh ? ss_row : addr[15:8];
 	wire [31:0] mem_be;
 	wire [2047:0] mem_o;
 	
@@ -41,7 +55,7 @@ module vram
 	generate
 		for (i = 0; i < 32; i = i + 1)
 		begin : l1
-			assign mem_be[i] = addr[4:0] == i;
+			assign mem_be[i] = (ss_mem_en ? ss_mem_addr[4:0] : addr[4:0]) == i;
 		end
 		for (i = 0; i < 8; i = i + 1)
 		begin : l2
@@ -50,8 +64,8 @@ module vram
 				.clock(MCLK),
 				.address(mem_addr),
 				.byteena(mem_be),
-				.data({32{RD_i}}),
-				.wren(wr & (addr[7:5] == i)),
+				.data({32{ss_mem_en ? ss_mem_wdata : RD_i}}),
+				.wren(ss_mem_en ? (ss_mem_we & (ss_mem_addr[7:5] == i)) : (wr & ~ss_hold & (addr[7:5] == i))),
 				.q(mem_o[(256*(i+1)-1):(256*i)])
 				);
 		end
@@ -71,6 +85,13 @@ module vram
 	
 	always @(posedge MCLK)
 	begin
+		ssx_bsel <= ss_mem_addr[7:0];
+		ssx_vram_rdata <= slice_p[slice_sel];
+	end
+	
+	always @(posedge MCLK)
+	begin
+		ss_row <= mem_addr;
 		if (dt & !o_OE & OE)
 		begin
 			addr_ser <= addr[7:0];
@@ -98,7 +119,7 @@ module vram
 		
 		if (rd)
 		begin
-			RD_o <= slice_p[addr[7:0]];
+			RD_o <= slice_p[slice_sel];
 			o_valid <= 1'h1;
 		end
 		else if (CAS | OE)

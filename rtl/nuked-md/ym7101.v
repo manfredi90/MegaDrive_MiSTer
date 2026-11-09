@@ -29,6 +29,14 @@
 module ym7101
 	(
 	input MCLK,
+	// savestate access to the internal arrays (names starting with ssx_ are not scanned)
+	input ss_hold,
+	input ss_mem_act,
+	input [3:0] ss_mem_sel,
+	input [6:0] ss_mem_addr,
+	input ss_mem_we,
+	input [55:0] ss_mem_wdata,
+	output reg [55:0] ssx_vdp_rdata,
 	input [7:0] SD,
 	output SE1,
 	output SE0,
@@ -2218,6 +2226,29 @@ module ym7101
 	reg [55:0] linebuffer_out_1;
 	
 	reg [8:0] color_ram[0:63];
+	
+	wire ss_vsram = ss_mem_act & (ss_mem_sel == 4'd0);
+	wire ss_sat = ss_mem_act & (ss_mem_sel == 4'd1);
+	wire ss_sprdata = ss_mem_act & (ss_mem_sel == 4'd2);
+	wire ss_linebuffer = ss_mem_act & (ss_mem_sel == 4'd3);
+	wire ss_color_ram = ss_mem_act & (ss_mem_sel == 4'd4);
+	reg [10:0] ssx_vsram_q;
+	reg [20:0] ssx_sat_q;
+	reg [33:0] ssx_sprdata_q;
+	reg [55:0] ssx_linebuffer_q;
+	reg [8:0] ssx_color_ram_q;
+	reg [3:0] ssx_rsel;
+	always @(posedge MCLK)
+	begin
+		ssx_rsel <= ss_mem_sel;
+		case (ssx_rsel)
+			4'd0: ssx_vdp_rdata <= ssx_vsram_q;
+			4'd1: ssx_vdp_rdata <= ssx_sat_q;
+			4'd2: ssx_vdp_rdata <= ssx_sprdata_q;
+			4'd3: ssx_vdp_rdata <= ssx_linebuffer_q;
+			default: ssx_vdp_rdata <= ssx_color_ram_q;
+		endcase
+	end
 	reg [8:0] color_ram_out;
 	
 	// extra
@@ -4774,13 +4805,19 @@ module ym7101
 	
 	// vsram
 	
-	wire [5:0] vsram_index = l212;
+	wire [5:0] vsram_index = ss_mem_act ? ss_mem_addr[5:0] : l212;
 	
 	always @(posedge MCLK)
 	begin
-		if (vsram_index < 6'd40)
+		ssx_vsram_q <= vsram[vsram_index];
+		if (ss_vsram)
 		begin
-			if (hclk1) // write cycle
+			if (ss_mem_we)
+				vsram[vsram_index] <= ss_mem_wdata[10:0];
+		end
+		else if (vsram_index < 6'd40)
+		begin
+			if (hclk1 & ~ss_hold) // write cycle
 			begin
 				if (l211)
 					vsram[vsram_index][7:0] <= l181[7:0];
@@ -6001,7 +6038,7 @@ module ym7101
 	
 	// sat cache
 	
-	wire [6:0] sat_index = w695;
+	wire [6:0] sat_index = ss_mem_act ? ss_mem_addr[6:0] : w695;
 	
 	wire [20:0] sat_data_in;
 	
@@ -6015,9 +6052,15 @@ module ym7101
 	
 	always @(posedge MCLK)
 	begin
-		if (sat_index < 7'd80)
+		ssx_sat_q <= sat[sat_index];
+		if (ss_sat)
 		begin
-			if (hclk1) // write cycle
+			if (ss_mem_we)
+				sat[sat_index] <= ss_mem_wdata[20:0];
+		end
+		else if (sat_index < 7'd80)
+		begin
+			if (hclk1 & ~ss_hold) // write cycle
 			begin
 				if (w687)
 					sat[sat_index][6:0] <= sat_data_in[6:0];
@@ -6049,7 +6092,7 @@ module ym7101
 	
 	// sprdata
 	
-	wire [4:0] sprdata_index = w697;
+	wire [4:0] sprdata_index = ss_mem_act ? ss_mem_addr[4:0] : w697;
 	
 	wire [33:0] sprdata_in;
 	
@@ -6068,9 +6111,15 @@ module ym7101
 	
 	always @(posedge MCLK)
 	begin
-		if (sprdata_index < 5'd20)
+		ssx_sprdata_q <= sprdata[sprdata_index];
+		if (ss_sprdata)
 		begin
-			if (hclk1) // write cycle
+			if (ss_mem_we)
+				sprdata[sprdata_index] <= ss_mem_wdata[33:0];
+		end
+		else if (sprdata_index < 5'd20)
+		begin
+			if (hclk1 & ~ss_hold) // write cycle
 			begin
 				if (w712)
 					sprdata[sprdata_index][10:0] <= sprdata_in[10:0];
@@ -6096,7 +6145,7 @@ module ym7101
 	
 	// linebuffer
 	
-	wire [5:0] linebuffer_index = w825;
+	wire [5:0] linebuffer_index = ss_mem_act ? ss_mem_addr[5:0] : w825;
 	
 	wire [55:0] linebuffer_data_in;
 	
@@ -6145,9 +6194,15 @@ module ym7101
 	
 	always @(posedge MCLK)
 	begin
-		if (linebuffer_index < 6'd40)
+		ssx_linebuffer_q <= linebuffer[linebuffer_index];
+		if (ss_linebuffer)
 		begin
-			if (w817) // write cycle
+			if (ss_mem_we)
+				linebuffer[linebuffer_index] <= ss_mem_wdata[55:0];
+		end
+		else if (linebuffer_index < 6'd40)
+		begin
+			if (w817 & ~ss_hold) // write cycle
 			begin
 				if (w910)
 					linebuffer[linebuffer_index][6:0] <= linebuffer_data_in[6:0];
@@ -6773,13 +6828,19 @@ module ym7101
 	
 	// color ram
 	
-	wire [5:0] color_ram_index = l617;
+	wire [5:0] color_ram_index = ss_mem_act ? ss_mem_addr[5:0] : l617;
 	
 	wire [8:0] color_ram_data_in = { l620, w1079, w1078 };
 	
 	always @(posedge MCLK)
 	begin
-		if (hclk1) // write cycle
+		ssx_color_ram_q <= color_ram[color_ram_index];
+		if (ss_color_ram)
+		begin
+			if (ss_mem_we)
+				color_ram[color_ram_index] <= ss_mem_wdata[8:0];
+		end
+		else if (hclk1 & ~ss_hold) // write cycle
 		begin
 			if (l602)
 				color_ram[color_ram_index][5:0] <= color_ram_data_in[5:0];

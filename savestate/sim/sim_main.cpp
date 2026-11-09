@@ -389,6 +389,60 @@ static void test_ctrl(unsigned seed)
 	quit(0);   // before the Sim destructors run
 }
 
+// State files as Main_MiSTer writes them (slot 1 = DDR words 0x20000..), for the converter test.
+static const int SLOT1 = 0x100000 / 8;
+
+// Run to a random point, save through the controller and write slot 1 to a file.
+static void ctrl_save_file(unsigned seed, const char *file)
+{
+	std::mt19937_64 rng(seed);
+	Sim s;
+	s.top->use_ctrl = 1;
+	{ std::mt19937_64 c(seed + 100); s.fill_cart(c); }
+	uint64_t k1 = FRAME + rng() % FRAME;
+	while (s.t < k1) s.ctrl_step(nullptr);
+	uint64_t saved = s.ctrl_op(true, 1, nullptr);
+	uint64_t w0 = s.top->rootp->tb->ddr[SLOT1];
+	uint32_t n = (uint32_t)(w0 >> 32) / 2 + 1;
+	FILE *f = fopen(file, "wb");
+	for (uint32_t i = 0; i < n; i++) { uint64_t w = s.top->rootp->tb->ddr[SLOT1 + i]; fwrite(&w, 8, 1, f); }
+	fclose(f);
+	printf("saved at cycle %llu to %s (%u words)\n", (unsigned long long)saved, file, n);
+	quit(0);
+}
+
+// Load a state file into slot 1 at another point and compare the replay with a reference.
+static void ctrl_load_file(unsigned seed, const char *file, uint64_t saved)
+{
+	const uint64_t T = saved + FRAME + FRAME / 2;
+	printf("reference run...\n");
+	std::vector<uint32_t> ref(T);
+	Sim r;
+	r.top->use_ctrl = 1;
+	{ std::mt19937_64 c(seed + 100); r.fill_cart(c); }
+	while (r.t < T) r.ctrl_step(nullptr), ref[r.t - 1] = r.sig();
+
+	Sim s;
+	s.top->use_ctrl = 1;
+	{ std::mt19937_64 c(seed + 999); s.fill_cart(c); }
+	while (s.t < saved + FRAME / 3) s.ctrl_step(&ref);
+	FILE *f = fopen(file, "rb");
+	uint64_t w;
+	for (int i = 0; fread(&w, 8, 1, f) == 1; i++) s.top->rootp->tb->ddr[SLOT1 + i] = i ? w : (w | 0xFFFFFFFFULL);
+	fclose(f);
+	if (!s.ctrl_op(false, 1, nullptr)) {
+		printf("LOAD REFUSED\n");
+		quit(1);
+	}
+	s.t = saved;
+	while (s.t < T) s.ctrl_step(&ref);
+	for (int i = 0; i < 32768; i++)
+		if (s.ram68(i) != r.ram68(i)) { printf("RAM MISMATCH at word %d\n", i); quit(1); }
+	if (!s.cart_equal(r)) { printf("CART STATE MISMATCH\n"); quit(1); }
+	printf("  replay after loading %s matches the reference\nPASS\n", file);
+	quit(0);
+}
+
 int main(int argc, char **argv)
 {
 	setvbuf(stdout, nullptr, _IOLBF, 0);
@@ -398,6 +452,9 @@ int main(int argc, char **argv)
 	else if (argc >= 4 && !strcmp(argv[1], "trace")) trace(strtoull(argv[2], 0, 0), argv[3]);
 	else if (argc >= 2 && !strcmp(argv[1], "test")) test(argc > 2 ? atoi(argv[2]) : 1);
 	else if (argc >= 2 && !strcmp(argv[1], "ctrl")) test_ctrl(argc > 2 ? atoi(argv[2]) : 1);
-	else { printf("usage: sim frames <n> [out.ppm] | trace <cycles> <file> | test [seed] | ctrl [seed]\n"); quit(1); }
+	else if (argc >= 4 && !strcmp(argv[1], "savefile")) ctrl_save_file(atoi(argv[2]), argv[3]);
+	else if (argc >= 5 && !strcmp(argv[1], "loadfile")) ctrl_load_file(atoi(argv[2]), argv[3], strtoull(argv[4], 0, 0));
+	else { printf("usage: sim frames <n> [out.ppm] | trace <cycles> <file> | test [seed] | ctrl [seed]\n"
+		"       savefile <seed> <file> | loadfile <seed> <file> <saved cycle>\n"); quit(1); }
 	quit(0);
 }

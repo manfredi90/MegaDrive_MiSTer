@@ -7,3 +7,4 @@ obj_lib/
 68k_ucode.txt
 68k_ncode.txt
 md_core_ss.vh
+variant/

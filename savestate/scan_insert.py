@@ -6,11 +6,16 @@ Every flip-flop gets   D' = ss_shift ? <previous chain bit> : D
 so while ss_hold is high the whole board is frozen and with ss_shift it becomes one long
 shift register from ss_in to ss_out. Freezing through the register's clock enable costs
 no logic in front of each flip-flop (Cyclone V registers have a hardware enable); only the
-shift mux is added. The netlist must keep its clock enables ($dffe, dffunmap -srst-only). Bits whose net name starts with "ssx_" belong to the
-savestate logic itself (memory access) and are left untouched.
+shift mux is added. The netlist must keep its clock enables ($dffe, dffunmap -srst-only).
+Bits whose net name starts with "ssx_" belong to the savestate logic itself (memory
+access) and are left untouched.
 
-The bits come out of ss_out sorted by register name (e.g. md_board.m68k.w529[3]), so the
-order does not depend on Yosys' internal names and only moves where the design changes.
+Almost half of the flip-flops take D straight from another flip-flop (the shift registers
+and delay lines of the gate-level chips). The chain follows those links wherever it can,
+so that shifting runs through the existing D path and needs no mux. The rest of the order
+comes from the register names (e.g. md_board.m68k.w529[3]), not from Yosys' internal
+names, so it is deterministic and only moves where the design changes.
+
 The layout map lists, in that order, every bit with its power-on value and all the names
 it has in the design, followed by layout_fixed.txt (memories, cartridge fields). Its hash
 goes into the savestate header; the converter uses the maps to carry states across builds.
@@ -86,26 +91,54 @@ def main():
             if iv is not None and b not in init and len(iv) == w:
                 init[b] = iv[w - 1 - i]
 
-    ffs = []
+    named = {}
+    dsrc = {}
     for cname, cell in cells.items():
         if cell['type'] not in FF:
             continue
         assert int(cell['parameters']['CLK_POLARITY'], 2) == 1
-        for i, b in enumerate(cell['connections']['Q']):
+        for i, (b, d) in enumerate(zip(cell['connections']['Q'], cell['connections']['D'])):
             if isinstance(b, int) and b not in excluded:
                 names = sorted(set(aliases.get(b, [])), key=lambda n: (-n.count('.'), natural(n)))
                 if not names:
                     names = [f'?{cname}[{i}]']   # no name in the design: cannot be matched across builds
-                ffs.append((natural(names[0]), names, b))
-    ffs.sort(key=lambda f: f[0])
-    unnamed = sum(1 for f in ffs if f[1][0].startswith('?'))
+                named[b] = names
+                dsrc[b] = d
+    key = {b: natural(n[0]) for b, n in named.items()}
+    unnamed = sum(1 for n in named.values() if n[0].startswith('?'))
 
-    # stream order (as read from ss_out) = sorted; the chain runs the other way
+    # natural links a -> b where D(b) = Q(a); each a can lead to one b only
+    succ, pred = {}, {}
+    for b in sorted(named, key=key.get):
+        a = dsrc[b]
+        if isinstance(a, int) and a in named and a != b and a not in succ:
+            succ[a], pred[b] = b, a
+    flow, seen = [], set()
+
+    def follow(x):
+        while x is not None and x not in seen:
+            seen.add(x)
+            flow.append(x)
+            x = succ.get(x)
+
+    segments = sorted((b for b in named if b not in pred), key=key.get)
+    for h in segments:
+        follow(h)
+    cycles = 0
+    for x in sorted(named, key=key.get):   # what is left are rings: break each at its first name
+        if x not in seen:
+            cycles += 1
+            del succ[pred.pop(x)]
+            follow(x)
+    assert len(flow) == len(named)
+
+    # flow runs from ss_in to ss_out; the stream (as read from ss_out) is the other way
     prev = {}
     chain = ss_in
-    for _, _, b in reversed(ffs):
+    for b in flow:
         prev[b] = chain
         chain = b
+    ffs = [(None, named[b], b) for b in reversed(flow)]
     length = len(ffs)
 
     def gate(kind, conn, ports_out='Y'):
@@ -139,7 +172,7 @@ def main():
             enables[(en, pol)] = gate('$or', {'A': ss_shift, 'B': gate('$and', {'A': not_hold, 'B': act})})
         return enables[(en, pol)]
 
-    split = 0
+    split = muxes = 0
     for name in sorted(n for n, c in cells.items() if c['type'] in FF):
         cell = cells[name]
         q = cell['connections']['Q']
@@ -162,21 +195,29 @@ def main():
         q = cell['connections']['Q']
         w = len(q)
         en = enable(cell)
-        m = new_bits(w)
-        new_cells[f'$ss_shift{name}'] = {
-            'hide_name': 1, 'type': '$mux',
-            'parameters': {'WIDTH': format(w, '032b')},
-            'attributes': {},
-            'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
-            'connections': {'A': d, 'B': [prev[b] for b in q], 'S': [ss_shift], 'Y': m},
-        }
+        need = [i for i in range(w) if prev[q[i]] != d[i]]
+        m = list(d)
+        if need:
+            y = new_bits(len(need))
+            new_cells[f'$ss_shift{name}'] = {
+                'hide_name': 1, 'type': '$mux',
+                'parameters': {'WIDTH': format(len(need), '032b')},
+                'attributes': {},
+                'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
+                'connections': {'A': [d[i] for i in need], 'B': [prev[q[i]] for i in need],
+                                'S': [ss_shift], 'Y': y},
+            }
+            for i, yb in zip(need, y):
+                m[i] = yb
+            muxes += len(need)
         cell['type'] = '$dffe'
         cell['parameters']['EN_POLARITY'] = format(1, '032b')
         cell['port_directions']['EN'] = 'input'
         cell['connections']['D'] = m
         cell['connections']['EN'] = [en]
     cells.update(new_cells)
-    print(f'clock enables: {len(enables)} distinct + 1, {split} registers split')
+    print(f'clock enables: {len(enables)} distinct + 1, {split} registers split, '
+          f'{muxes} shift muxes, {len(segments)} chain segments + {cycles} rings')
 
     # ss_out: drive from the end of the chain (the RTL ties it to ss_in)
     out = new_bits(1)

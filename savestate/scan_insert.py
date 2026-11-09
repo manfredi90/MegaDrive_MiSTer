@@ -140,6 +140,30 @@ def main():
         if name == 'ss_out':
             net['bits'] = out
 
+    # Quartus 17 crashes (SGN "dimension == 0") on escaped names such as
+    # \md_board.ym.fm.ch.l1[0].sr.MCLK: keep only identifier characters. The layout map
+    # above keeps the original names.
+    def clean(n):
+        return re.sub(r'[^A-Za-z0-9_]', '_', n)
+
+    taken = set(ports)
+    renamed = {}
+    for name in list(nets):
+        if name.startswith('$') or name in ports:
+            renamed[name] = name
+            continue
+        new = clean(name)
+        while new in taken:
+            new += '_'
+        taken.add(new)
+        renamed[name] = new
+    mod['netnames'] = {renamed[n]: v for n, v in nets.items()}
+    mod['cells'] = {(n if n.startswith('$') else clean(n)): c for n, c in cells.items()}
+    for c in mod['cells'].values():
+        memid = c.get('parameters', {}).get('MEMID')
+        if isinstance(memid, str) and memid.startswith('\\'):
+            c['parameters']['MEMID'] = '\\' + clean(memid[1:])
+
     json.dump(design, open(dst, 'w'))
 
     lines = ['mdss-layout 1', f'chain {length}']

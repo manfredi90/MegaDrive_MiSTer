@@ -1,0 +1,43 @@
+# Fixed part of the savestate layout, appended to every layout map (and so covered by
+# its hash). rtl/ss_ctrl.sv (memory order, sizes, packing) and rtl/cartridge.sv
+# (ss_rdata bit fields) must match this file.
+#
+# mem <name> <entries> <entries per 64-bit word> <entry bits>
+mem vsram 40 1 11
+mem sat 80 1 21
+mem sprdata 20 1 34
+mem linebuffer 40 1 56
+mem cram 64 1 9
+mem vram 65536 8 8
+mem ram68k 32768 4 16
+mem ramz80 8192 8 8
+mem sram 32768 4 16
+#
+# cart <word> <name> <lsb> <bits>
+cart 0 md_bank 0 48
+cart 0 md_bank_sram 48 1
+cart 0 md_bank_use 49 1
+cart 0 rom_prot 50 1
+cart 0 jcart_th 51 1
+cart 0 realtec_boot 52 1
+cart 0 realtec_bank 53 5
+cart 0 realtec_mask 58 5
+cart 1 sf001_bank_reg 0 8
+cart 1 sf002_bank_reg 8 8
+cart 1 sf004_sram_reg 16 1
+cart 1 sf004_bank_reg 17 8
+cart 1 sf004_first_page 25 3
+cart 1 eeprom_bank 28 1
+cart 1 eeprom_sdai 29 1
+cart 1 eeprom_scl 30 1
+cart 1 ms_cfg 31 8
+cart 1 ms_ram_c 39 1
+cart 1 boot_en 40 1
+cart 1 fm_d 41 8
+cart 1 fm_a 49 1
+cart 1 fm_det_data 50 3
+cart 1 mapper_codies 53 1
+cart 1 lock_mapper_B 54 1
+cart 1 mapper_codies_lock 55 1
+cart 2 last_read_addr 0 16
+cart 2 ms_bank 16 32

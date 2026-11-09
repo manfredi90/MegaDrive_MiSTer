@@ -234,6 +234,13 @@ module md_core
 		.res_z80(res_z80)
 	);
 
+`ifdef SS_TEST_VARIANT
+	// savestate converter test only: an extra register whose name sorts first, so every
+	// other bit of the chain moves
+	(* keep *) reg [7:0] aaa_ss_test_pad = 8'h5A;
+	always @(posedge MCLK2) aaa_ss_test_pad <= aaa_ss_test_pad + 8'd1;
+`endif
+
 	// Without the scan chain (plain RTL simulation) the chain is just a wire.
 	assign ss_out = ss_in;
 

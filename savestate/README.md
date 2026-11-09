@@ -13,7 +13,8 @@ each one to a save bus by hand, the whole clk_md side of the core is turned into
   `scan_insert.py`, which gives every flip-flop
   `D' = ss_shift ? previous_bit : (ss_hold ? Q : D)`.
   The result is `rtl/md_core_ss.v` (what Quartus compiles) and
-  `rtl/md_core_ss.vh` (chain length).
+  `rtl/md_core_ss.vh` (chain length, layout hash). Bits are saved sorted by register
+  name, so the order does not depend on Yosys and only moves where the design does.
 * Memories are not in the chain; `ss_mem_*` reads and writes them while the core is
   held: VSRAM, SAT cache, sprite data, line buffer, CRAM, VRAM, 68k RAM, Z80 RAM,
   plus the cartridge backup RAM (select 8, in `MegaDrive.sv`).
@@ -30,14 +31,34 @@ each one to a save bus by hand, the whole clk_md side of the core is turned into
   in the config string: 4 slots of 1 MB). A state is ~210 KB; the core is held
   for about 9 ms on a save and 12 ms on a load (most of it is DDR3 round trips).
 
-## After changing anything in rtl/md_core.v or rtl/nuked-md
+## Layouts and old states
+
+Each build has a layout: the chain bits in save order with their names and power-on
+values, the memories and the cartridge fields (`savestate/layout_fixed.txt`). It is
+written to `savestate/layouts/<hash>.map.gz` and the hash goes into every state. The
+core only loads states with its own hash; the others are left alone, never loaded wrong.
+
+`savestate/convert/mdss_convert.py` carries states across builds by name: registers
+present in both keep their value, new ones get their power-on value, removed ones are
+dropped, memories and cartridge fields are copied. The original stays as
+`<name>.ss.<oldhash>.bak`. On the MiSTer it runs from the Scripts menu
+(`megadrive_savestates.sh`); on a PC: `python3 mdss_convert.py --maps maps X:\savestates\MegaDrive`.
+It needs the map of the build that saved each state, so maps are never deleted.
+
+If an update changes what a register means (not just adds or removes some), a
+converted state can glitch or hang right after loading; it still loads in the old
+build with the `.bak` file.
+
+After changing anything in `rtl/md_core.v` or `rtl/nuked-md`:
 
 ```
 sh savestate/gen_netlist.sh        # needs yosys and python3
+git add savestate/layouts          # keep the new map
 ```
 
-The chain order changes with the design, so states saved by an older build are
-refused (the header stores the chain length) rather than loaded wrong.
+The CI build does the same and warns when the map is not committed. Its
+`MegaDrive_SS_sd` artifact is laid out as the SD card: the core in `_Console`, the
+script in `Scripts`, the converter and all maps in `Scripts/.megadrive_savestates`.
 
 ## Tests
 
@@ -51,7 +72,12 @@ cd sim
 ./obj_ss/sim test 1                # save, run on, scramble, load: replay must match cycle by cycle
 ./obj_ss/sim ctrl 1                # same through ss_ctrl/ss_ddr with a stalling DDR model
 ./obj_rtl/sim trace N a; ./obj_ss/sim trace N b; cmp a b   # netlist vs RTL
+./test_convert.sh                  # state saved by build A, converted, replayed in build B
 ```
+
+Build B in `test_convert.sh` is build A plus a register whose name sorts first, so every
+bit of the chain moves; B must refuse the unconverted state, replay the converted one
+cycle by cycle, and converting back must give the original file.
 
 Netlist and RTL traces match except for a one-clock difference on the cartridge
 LWR strobe about every 12,500 clocks: it comes out of a combinational loop in the

@@ -11,9 +11,13 @@
 //
 //  Slot layout in DDR3 (64-bit words):
 //    0   {size in 32-bit words after word 0, save counter}  (read by Main_MiSTer)
-//    1   {"MDSS", version, 16'd0}
-//    2   {chain length, cartridge state bits}
+//    1   {"MDSS", version, cartridge words}
+//    2   {layout hash, chain length}
 //    3…  data words: scan chain (LSB first), memories in order, cartridge state
+//
+//  The layout hash names the map savestate/layouts/<hash>.map.gz written by
+//  savestate/gen_netlist.sh. A load only accepts this build's layout; states from other
+//  builds are converted by savestate/convert/mdss_convert.py.
 //============================================================================
 
 module ss_ctrl
@@ -81,9 +85,9 @@ endfunction
 localparam [31:0] MEM_WORDS  = 40 + 80 + 20 + 40 + 64 + 65536/8 + 32768/4 + 8192/8 + 32768/4;
 localparam [31:0] DATA_WORDS = 2 + CHAIN_WORDS + MEM_WORDS + CART_WORDS;   // after word 0
 localparam [31:0] MAGIC   = "MDSS";
-localparam [15:0] VERSION = 16'd1;
-localparam [63:0] WORD1   = {MAGIC, VERSION, 16'd0};
-localparam [63:0] WORD2   = SS_CHAIN_LEN * 64'h100000000 + CART_WORDS;
+localparam [15:0] VERSION = 16'd2;
+localparam [63:0] WORD1   = {MAGIC, VERSION, 16'd0} + CART_WORDS;
+localparam [63:0] WORD2   = {SS_LAYOUT_HASH, 32'd0} + SS_CHAIN_LEN;
 
 localparam S_IDLE = 0, S_HDR = 1, S_SAFE = 2, S_PRE = 3, S_CHAIN = 4, S_MEM = 5, S_CART = 6,
            S_POST = 7, S_REFRESH = 8, S_TAIL = 9, S_RELEASE = 10, S_DDR = 11;
@@ -156,7 +160,7 @@ always @(posedge clk) begin
 			if(allow & (save | load)) state <= save ? S_SAFE : S_HDR;
 		end
 
-		// load: only accept a slot written by this build (same layout and chain)
+		// load: only accept a slot with this build's layout
 		S_HDR: begin
 			step <= step + 1'd1;
 			case(step)

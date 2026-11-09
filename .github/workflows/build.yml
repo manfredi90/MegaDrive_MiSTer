@@ -33,12 +33,31 @@ jobs:
           grep -A20 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt || true
           grep -B2 -A12 "Timing requirements not met" output_files/MegaDrive.sta.rpt | head -60 || true
 
+      # files laid out as on the SD card: the core, the converter and every layout map
+      - name: SD card package
+        run: |
+          d=sd/Scripts/.megadrive_savestates
+          mkdir -p sd/_Console $d/maps
+          cp output_files/MegaDrive.rbf sd/_Console/MegaDrive_SS_$(date +%Y%m%d).rbf
+          cp savestate/convert/megadrive_savestates.sh sd/Scripts/
+          cp savestate/convert/mdss_convert.py $d/
+          cp savestate/layouts/*.map.gz $d/maps/
+          sed -n "s/.*32'h\(........\);/\1/p" rtl/md_core_ss.vh > $d/maps/current
+          echo "layout: $(cat $d/maps/current)"
+          git ls-files --error-unmatch savestate/layouts/$(cat $d/maps/current).map.gz > /dev/null 2>&1 ||
+            echo "::warning::layout map $(cat $d/maps/current) is not committed: add it to savestate/layouts"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MegaDrive_SS_sd
+          path: sd/
+          include-hidden-files: true
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: MegaDrive_savestates
+          name: reports
           path: |
-            output_files/MegaDrive.rbf
             output_files/*.summary
             output_files/MegaDrive.sta.rpt
             build.log

@@ -6,6 +6,10 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: read
+  statuses: write   # stage results as commit statuses, readable while the build runs
+
 jobs:
   build:
     runs-on: ubuntu-24.04   # Yosys 0.33, as used to develop the netlist script
@@ -24,6 +28,15 @@ jobs:
           yosys -V
           sh savestate/gen_netlist.sh 2>&1 | tee gen.log || { echo "::error title=gen_netlist::$(tail -30 gen.log | awk '{printf "%s%%0A", $0}')"; exit 1; }
 
+      - name: Status helper
+        run: |
+          cat > "$RUNNER_TEMP/status.sh" <<'EOS'
+          status() { gh api "repos/$GITHUB_REPOSITORY/statuses/$GITHUB_SHA" -f state=success -f context="quartus/$1" \
+            -f description="$(echo "$2" | cut -c1-139)" > /dev/null || true; }
+          EOS
+          echo "BASH_ENV=$RUNNER_TEMP/status.sh" >> "$GITHUB_ENV"
+          echo "GH_TOKEN=${{ github.token }}" >> "$GITHUB_ENV"
+
       # Quartus runs in the background; the next steps wait for each stage and put its
       # results on the run page as annotations, so they show up while the build goes on
       - name: Start Quartus
@@ -38,6 +51,7 @@ jobs:
           sleep 5
           grep -E "Total logic elements|Total registers|Total block memory bits|Total RAM Blocks" \
             output_files/MegaDrive.map.summary 2>/dev/null | sed 's/^/::notice::synthesis: /' || true
+          status synthesis "$(grep -E "Logic utilization|Total registers" output_files/MegaDrive.map.summary 2>/dev/null | sed 's/^ *//; s/ *: */ /' | tr '\n' ';')"
           [ ! -f build.rc ] || [ "$(cat build.rc)" = 0 ] || [ -f output_files/MegaDrive.fit.summary ] || exit 1
 
       - name: Fitter
@@ -47,6 +61,7 @@ jobs:
           sleep 5
           grep -E "Logic utilization|Total registers|Total block memory bits|Total RAM Blocks|Total DSP" \
             output_files/MegaDrive.fit.summary 2>/dev/null | sed 's/^/::notice::fit: /' || true
+          status fitter "$(grep -E "Logic utilization|Total registers|Total RAM Blocks" output_files/MegaDrive.fit.summary 2>/dev/null | sed 's/^ *//; s/ *: */ /' | tr '\n' ';')"
 
       - name: Timing and result
         shell: bash
@@ -56,6 +71,7 @@ jobs:
             grep -E "^; [^;]+; -?[0-9]" | sed 's/^/::notice::setup slack: /' || true
           grep -q "Timing requirements not met" output_files/MegaDrive.sta.rpt 2>/dev/null &&
             echo "::warning::Timing requirements not met" || true
+          status timing "$(grep -A8 "Slow 1100mV 85C Model Setup Summary" output_files/MegaDrive.sta.rpt 2>/dev/null | grep -E "^; [^;]+; -?[0-9]" | head -4 | tr -s ' ' | tr '\n' ' ')"
           exit $(cat build.rc)
 
       # errors and the end of the log on the run page

@@ -8,7 +8,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # Yosys 0.33, as used to develop the netlist script
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +17,12 @@ jobs:
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 
       - name: Generate the savestate netlist (rtl/md_core_ss.v)
+        shell: bash
         run: |
+          set -o pipefail
           sudo apt-get update -q && sudo apt-get install -y -q yosys
-          sh savestate/gen_netlist.sh
+          yosys -V
+          sh savestate/gen_netlist.sh 2>&1 | tee gen.log || { echo "::error title=gen_netlist::$(tail -30 gen.log | awk '{printf "%s%%0A", $0}')"; exit 1; }
 
       - name: Compile
         shell: bash

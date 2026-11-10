@@ -161,18 +161,35 @@ def main():
 
     new_cells = {}
     not_hold = gate('$not', {'A': ss_hold})
-    run = gate('$or', {'A': ss_shift, 'B': not_hold})        # enable of a plain $dff
-    enables = {}
+    # A few clock enables feed thousands of flip-flops (2048 for one VRAM slice): with
+    # ss_shift in front, one LUT driving all of them misses timing by several ns depending
+    # on placement. Every enable gets its own LUT per group of at most EN_GROUP bits, named
+    # ss_en_* and kept apart in Quartus (synthesis keep, see gen_netlist.sh).
+    EN_GROUP = 32
+    actives = {}
+    groups = {}
+    n_en = 0
 
-    def enable(cell):
+    def enable(cell, width):
+        nonlocal n_en
         if cell['type'] == '$dff':
-            return run
-        en = cell['connections']['EN'][0]
-        pol = int(cell['parameters']['EN_POLARITY'], 2)
-        if (en, pol) not in enables:
-            act = en if pol else gate('$not', {'A': en})
-            enables[(en, pol)] = gate('$or', {'A': ss_shift, 'B': gate('$and', {'A': not_hold, 'B': act})})
-        return enables[(en, pol)]
+            key = None
+        else:
+            key = (cell['connections']['EN'][0], int(cell['parameters']['EN_POLARITY'], 2))
+        g = groups.get(key)
+        if g is None or g[1] + width > EN_GROUP:
+            if key is None:
+                y = gate('$or', {'A': ss_shift, 'B': not_hold})
+            else:
+                if key not in actives:
+                    en, pol = key
+                    actives[key] = en if pol else gate('$not', {'A': en})
+                y = gate('$or', {'A': ss_shift, 'B': gate('$and', {'A': not_hold, 'B': actives[key]})})
+            nets[f'ss_en_{n_en}'] = {'hide_name': 0, 'bits': [y], 'attributes': {}}
+            n_en += 1
+            g = groups[key] = [y, 0]
+        g[1] += width
+        return g[0]
 
     split = muxes = 0
     for name in sorted(n for n, c in cells.items() if c['type'] in FF):
@@ -196,7 +213,6 @@ def main():
         d = cell['connections']['D']
         q = cell['connections']['Q']
         w = len(q)
-        en = enable(cell)
         need = [i for i in range(w) if prev[q[i]] != d[i]]
         m = list(d)
         if need:
@@ -212,13 +228,30 @@ def main():
             for i, yb in zip(need, y):
                 m[i] = yb
             muxes += len(need)
+        orig_type = cell['type']
         cell['type'] = '$dffe'
-        cell['parameters']['EN_POLARITY'] = format(1, '032b')
         cell['port_directions']['EN'] = 'input'
         cell['connections']['D'] = m
-        cell['connections']['EN'] = [en]
+        # wide registers are cut into pieces of at most EN_GROUP bits, each on its own enable
+        pieces = [cell]
+        if w > EN_GROUP:
+            pieces = []
+            for k in range(0, w, EN_GROUP):
+                piece = json.loads(json.dumps(cell))
+                for p in ('D', 'Q'):
+                    piece['connections'][p] = cell['connections'][p][k:k + EN_GROUP]
+                piece['parameters']['WIDTH'] = format(len(piece['connections']['Q']), '032b')
+                pieces.append(piece)
+                if k:
+                    new_cells[f'{name}_ss{k // EN_GROUP}'] = piece
+            cells[name] = pieces[0]
+        for piece in pieces:
+            piece['type'] = orig_type
+            piece['connections']['EN'] = [enable(piece, len(piece['connections']['Q']))]
+            piece['type'] = '$dffe'
+            piece['parameters']['EN_POLARITY'] = format(1, '032b')
     cells.update(new_cells)
-    print(f'clock enables: {len(enables)} distinct + 1, {split} registers split, '
+    print(f'clock enables: {len(actives)} distinct + 1 in {n_en} groups, {split} registers split, '
           f'{muxes} shift muxes, {len(segments)} chain segments + {cycles} rings')
 
     # ss_out: drive from the end of the chain (the RTL ties it to ss_in)

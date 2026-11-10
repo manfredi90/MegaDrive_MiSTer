@@ -50,6 +50,11 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING ON
 set_global_assignment -name ALM_REGISTER_PACKING_EFFORT LOW
 set_global_assignment -name SEED 1
 
+# savestate: ss_shift and ss_hold reach every scan-chain register, let synthesis
+# replicate them so each copy drives a local group
+set_instance_assignment -name MAX_FANOUT 200 -to *ss_ctrl:ss_ctrl|ss_shift
+set_instance_assignment -name MAX_FANOUT 200 -to *ss_ctrl:ss_ctrl|ss_hold
+
 set_global_assignment -name VERILOG_MACRO "M68K_CHEAT=1"
 set_global_assignment -name VERILOG_MACRO "Z80_CHEAT=1"
 set_global_assignment -name VERILOG_MACRO "EXT_CLOCKS=1"

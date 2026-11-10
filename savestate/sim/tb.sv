@@ -45,15 +45,29 @@ wire        c_hold, c_shift, c_in, c_refresh, c_act, c_we;
 wire  [3:0] c_sel;
 wire [15:0] c_addr;
 wire [63:0] c_wdata;
+// SS_MEM_LATE: the memory port arrives one clock late in both directions, as the two-clock
+// multicycle constraints in MegaDrive.sdc allow
+`ifdef SS_MEM_LATE
+reg         m_act, m_we;
+reg   [3:0] m_sel;
+reg  [15:0] m_addr;
+reg  [63:0] m_wdata;
+always @(posedge clk) {m_act, m_we, m_sel, m_addr, m_wdata} <= {c_act, c_we, c_sel, c_addr, c_wdata};
+`else
+wire        m_act = c_act, m_we = c_we;
+wire  [3:0] m_sel = c_sel;
+wire [15:0] m_addr = c_addr;
+wire [63:0] m_wdata = c_wdata;
+`endif
 wire        core_hold   = use_ctrl ? c_hold    : ss_hold;
 wire        core_shift  = use_ctrl ? c_shift   : ss_shift;
 wire        core_in     = use_ctrl ? c_in      : ss_in;
 wire        core_refresh= use_ctrl ? c_refresh : ss_refresh;
-wire        core_act    = use_ctrl ? c_act     : ss_mem_act;
-wire  [3:0] core_sel    = use_ctrl ? c_sel     : ss_mem_sel;
-wire [15:0] core_addr   = use_ctrl ? c_addr    : ss_mem_addr;
-wire        core_we     = use_ctrl ? c_we      : ss_mem_we;
-wire [63:0] core_wdata  = use_ctrl ? c_wdata   : ss_mem_wdata;
+wire        core_act    = use_ctrl ? m_act     : ss_mem_act;
+wire  [3:0] core_sel    = use_ctrl ? m_sel     : ss_mem_sel;
+wire [15:0] core_addr   = use_ctrl ? m_addr    : ss_mem_addr;
+wire        core_we     = use_ctrl ? m_we      : ss_mem_we;
+wire [63:0] core_wdata  = use_ctrl ? m_wdata   : ss_mem_wdata;
 assign ctrl_hold = c_hold;
 
 // cartridge backup RAM model on clk_sys (select 8)
@@ -76,6 +90,13 @@ wire        ddr_req, ddr_ack, ddr_we;
 wire [28:0] ddr_addr;
 wire [63:0] ddr_wdata, ddr_rdata;
 wire [63:0] core_rdata;
+wire [63:0] ctrl_rdata = (core_sel == 4'd8) ? {48'd0, sram[sram_a]} : core_rdata;
+`ifdef SS_MEM_LATE
+reg  [63:0] ctrl_rdata_d;
+always @(posedge clk) ctrl_rdata_d <= ctrl_rdata;
+`else
+wire [63:0] ctrl_rdata_d = ctrl_rdata;
+`endif
 
 ss_ctrl ss_ctrl
 (
@@ -97,7 +118,7 @@ ss_ctrl ss_ctrl
 	.ss_mem_addr(c_addr),
 	.ss_mem_we(c_we),
 	.ss_mem_wdata(c_wdata),
-	.ss_mem_rdata((c_sel == 4'd8) ? {48'd0, sram[sram_a]} : core_rdata),
+	.ss_mem_rdata(ctrl_rdata_d),
 	.cart_idx(cart_idx),
 	.cart_rdata(cart_idx < 3 ? cart_regs[cart_idx] : 64'd0),
 	.cart_wdata(cart_wdata),

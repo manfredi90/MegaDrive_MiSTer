@@ -106,7 +106,8 @@ reg  [6:0] bit_cnt;
 reg  [3:0] mem_i;
 reg [16:0] ent;
 reg  [3:0] ent_in_word;
-reg  [2:0] step;
+reg  [3:0] step;
+reg [63:0] mem_q;          // ss_mem_rdata, registered (multicycle path, see MegaDrive.sdc)
 reg        ack_old;
 reg        ss_in_r;
 
@@ -136,6 +137,8 @@ begin
 	state     <= S_DDR;
 end
 endtask
+
+always @(posedge clk) mem_q <= ss_mem_rdata;
 
 always @(posedge clk) begin
 	ack_old    <= ddr_ack;
@@ -214,22 +217,24 @@ always @(posedge clk) begin
 			if(saving & ss_shift) buf_w[bit_cnt[5:0] - 1'd1] <= ss_out;
 		end
 
-		// memory entries: address, wait, read or write (3 clocks each)
+		// memory entries, 8 clocks each (16 for the cartridge RAM on clk_sys). MegaDrive.sdc
+		// gives the ss_mem_* outputs, the ssx_* read registers in md_core and mem_q two clocks,
+		// so: address out at clock 0, in the RAM by 2, read register by 4, mem_q by 6, taken
+		// at 7. Writes are held for two clocks (six on clk_sys) with address and data steady.
 		S_MEM: begin
 			ss_mem_act   <= 1;
 			ss_mem_sel   <= mem_i;
 			ss_mem_addr  <= ent[15:0];
 			ss_mem_wdata <= ent_val;
-			// the cartridge RAM runs on clk_sys: keep the write two clocks and wait longer
 			step <= step + 1'd1;
-			if(~saving && (step == 1 || (mem_i == 8 && step == 2))) ss_mem_we <= 1;
-			if(step == ((mem_i == 8) ? 3'd7 : 3'd3)) begin
+			if(~saving && ((mem_i == 8) ? (step >= 4 && step <= 9) : (step == 2 || step == 3))) ss_mem_we <= 1;
+			if(step == ((mem_i == 8) ? 4'd15 : 4'd7)) begin
 				step <= 0;
 				if(saving) begin
 					case(mem_epw(mem_i))
-						8: buf_w[ent_in_word[2:0]*8 +: 8]   <= ss_mem_rdata[7:0];
-						4: buf_w[ent_in_word[1:0]*16 +: 16] <= ss_mem_rdata[15:0];
-						default: buf_w <= ss_mem_rdata;
+						8: buf_w[ent_in_word[2:0]*8 +: 8]   <= mem_q[7:0];
+						4: buf_w[ent_in_word[1:0]*16 +: 16] <= mem_q[15:0];
+						default: buf_w <= mem_q;
 					endcase
 				end
 				ent_in_word <= ent_in_word + 1'd1;

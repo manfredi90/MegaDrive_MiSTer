@@ -20,3 +20,7 @@ set_multicycle_path -to [get_registers {*|md_core:md_core|*ssx_*}] -setup -end 2
 set_multicycle_path -to [get_registers {*|md_core:md_core|*ssx_*}] -hold -end 1
 set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|mem_q*}] -setup -end 2
 set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|mem_q*}] -hold -end 1
+# ss_mem_wdata is reloaded every clock in S_MEM but its source (buf_w by entry) only
+# changes at the last step of an entry; the write strobe comes two steps later
+set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|ss_mem_wdata*}] -setup -end 2
+set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|ss_mem_wdata*}] -hold -end 1

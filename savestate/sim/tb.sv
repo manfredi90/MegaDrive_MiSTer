@@ -41,19 +41,26 @@ module tb
 reg clk_sys = 0;
 always @(posedge clk) clk_sys <= ~clk_sys;
 
-wire        c_hold, c_shift, c_in, c_refresh, c_act, c_we;
+wire        c_hold, c_shift, c_chsel, c_in, c_refresh, c_act, c_we;
 wire  [3:0] c_sel;
 wire [15:0] c_addr;
 wire [63:0] c_wdata;
-// SS_MEM_LATE: the memory port arrives one clock late in both directions, as the two-clock
-// multicycle constraints in MegaDrive.sdc allow
+// SS_MEM_LATE: the memory port and the chain mux select arrive one clock late (memory
+// reads too), as the two-clock multicycle constraints in MegaDrive.sdc allow
 `ifdef SS_MEM_LATE
+reg         m_chsel;
+`ifdef SS_SEL_BAD
+always @(posedge clk) m_chsel <= c_hold;    // control: a select that falls after the release
+`else
+always @(posedge clk) m_chsel <= c_chsel;
+`endif
 reg         m_act, m_we;
 reg   [3:0] m_sel;
 reg  [15:0] m_addr;
 reg  [63:0] m_wdata;
 always @(posedge clk) {m_act, m_we, m_sel, m_addr, m_wdata} <= {c_act, c_we, c_sel, c_addr, c_wdata};
 `else
+wire        m_chsel = c_chsel;
 wire        m_act = c_act, m_we = c_we;
 wire  [3:0] m_sel = c_sel;
 wire [15:0] m_addr = c_addr;
@@ -61,6 +68,7 @@ wire [63:0] m_wdata = c_wdata;
 `endif
 wire        core_hold   = use_ctrl ? c_hold    : ss_hold;
 wire        core_shift  = use_ctrl ? c_shift   : ss_shift;
+wire        core_chsel  = use_ctrl ? m_chsel   : ss_hold;   // direct mode: shifts only while held
 wire        core_in     = use_ctrl ? c_in      : ss_in;
 wire        core_refresh= use_ctrl ? c_refresh : ss_refresh;
 wire        core_act    = use_ctrl ? m_act     : ss_mem_act;
@@ -110,6 +118,7 @@ ss_ctrl ss_ctrl
 	.busy(ctrl_busy),
 	.ss_hold(c_hold),
 	.ss_shift(c_shift),
+	.ss_sel(c_chsel),
 	.ss_in(c_in),
 	.ss_out(ss_out),
 	.ss_refresh(c_refresh),
@@ -228,6 +237,7 @@ assign dbg_cart = {cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time};
 
 	.ss_hold(core_hold),
 	.ss_shift(core_shift),
+	.ss_sel(core_chsel),
 	.ss_in(core_in),
 	.ss_out(ss_out),
 	.ss_refresh(core_refresh),

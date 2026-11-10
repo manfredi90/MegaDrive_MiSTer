@@ -41,6 +41,7 @@ module ss_ctrl
 	// md_core
 	output reg        ss_hold,
 	output reg        ss_shift,
+	output reg        ss_sel,       // chain mux select, two-clock paths (MegaDrive.sdc)
 	output            ss_in,
 	input             ss_out,
 	output reg        ss_refresh,
@@ -149,7 +150,8 @@ always @(posedge clk) begin
 
 	if(reset) begin
 		state      <= S_IDLE;
-		ss_hold    <= 0;
+		ss_sel     <= 0;
+		ss_hold    <= ss_sel;      // release one clock after ss_sel, see S_POST
 		ss_mem_act <= 0;
 	end
 	else case(state)
@@ -174,8 +176,12 @@ always @(posedge clk) begin
 			endcase
 		end
 
+		// ss_sel switches the chain muxes; it only reaches them in two clocks, so it rises
+		// with ss_hold (the first shift comes two clocks later) and falls as soon as the
+		// chain is done, long before ss_hold is released.
 		S_SAFE: if(safe) begin
 			ss_hold    <= 1;
+			ss_sel     <= 1;
 			ptr        <= slot_base + 29'd3;
 			phase      <= P_CHAIN;
 			chain_left <= SS_CHAIN_LEN;
@@ -263,7 +269,7 @@ always @(posedge clk) begin
 			ss_mem_act <= 0;
 			ptr <= ptr + 1'd1;
 			case(phase)
-				P_CHAIN: if(!chain_left) phase <= P_MEM;
+				P_CHAIN: if(!chain_left) begin phase <= P_MEM; ss_sel <= 0; end
 				P_MEM:   if(mem_i == NMEM) phase <= P_CART;
 				default: cart_idx <= cart_idx + 1'd1;
 			endcase

@@ -24,3 +24,7 @@ set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|mem_q*}] -hold -end 1
 # changes at the last step of an entry; the write strobe comes two steps later
 set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|ss_mem_wdata*}] -setup -end 2
 set_multicycle_path -to [get_registers {*|ss_ctrl:ss_ctrl|ss_mem_wdata*}] -hold -end 1
+# ss_sel (scan-chain mux select) is steady for at least two clocks before any shift and
+# before the core is released, see ss_ctrl.sv
+set_multicycle_path -from [get_registers {*|ss_ctrl:ss_ctrl|ss_sel*}] -setup -start 2
+set_multicycle_path -from [get_registers {*|ss_ctrl:ss_ctrl|ss_sel*}] -hold -start 1

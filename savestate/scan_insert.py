@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Insert the savestate scan chain into the flattened md_core netlist (Yosys JSON).
 
-Every flip-flop gets   D' = ss_shift ? <previous chain bit> : D
+Every flip-flop gets   D' = ss_sel ? <previous chain bit> : D
                        EN' = ss_shift | (~ss_hold & EN)      (EN = 1 for a plain $dff)
 so while ss_hold is high the whole board is frozen and with ss_shift it becomes one long
-shift register from ss_in to ss_out. Freezing through the register's clock enable costs
+shift register from ss_in to ss_out. ss_sel only changes while the board is frozen and
+not shifting (ss_ctrl keeps it steady for two clocks around every shift and release), so
+the muxes get two-clock timing and the single-clock ss_shift only feeds the enables. Freezing through the register's clock enable costs
 no logic in front of each flip-flop (Cyclone V registers have a hardware enable); only the
 shift mux is added. The netlist must keep its clock enables ($dffe, dffunmap -srst-only).
 Bits whose net name starts with "ssx_" belong to the savestate logic itself (memory
@@ -61,7 +63,7 @@ def main():
         assert len(bits) == 1
         return bits[0]
 
-    ss_hold, ss_shift, ss_in = port_bit('ss_hold'), port_bit('ss_shift'), port_bit('ss_in')
+    ss_hold, ss_shift, ss_sel, ss_in = (port_bit(p) for p in ('ss_hold', 'ss_shift', 'ss_sel', 'ss_in'))
 
     FF = ('$dff', '$dffe')
     bad = sorted({c['type'] for c in cells.values()
@@ -205,7 +207,7 @@ def main():
                 'attributes': {},
                 'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
                 'connections': {'A': [d[i] for i in need], 'B': [prev[q[i]] for i in need],
-                                'S': [ss_shift], 'Y': y},
+                                'S': [ss_sel], 'Y': y},
             }
             for i, yb in zip(need, y):
                 m[i] = yb

@@ -10,6 +10,7 @@ module md_core
 	// savestate
 	input ss_hold,
 	input ss_shift,
+	input ss_sel,
 	input ss_in,
 	output ss_out,
 	input ss_refresh,

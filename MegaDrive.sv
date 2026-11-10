@@ -410,7 +410,7 @@ always @(posedge clk_md) begin
 end
 
 // savestate signals (logic at the end of the file)
-wire        ss_hold, ss_shift, ss_in, ss_out, ss_refresh;
+wire        ss_hold, ss_shift, ss_sel, ss_in, ss_out, ss_refresh;
 wire        ss_mem_act, ss_mem_we;
 wire  [3:0] ss_mem_sel;
 wire [15:0] ss_mem_addr;
@@ -520,6 +520,7 @@ md_core md_core
 
 	.ss_hold(ss_hold),
 	.ss_shift(ss_shift),
+	.ss_sel(ss_sel),
 	.ss_in(ss_in),
 	.ss_out(ss_out),
 	.ss_refresh(ss_refresh),
@@ -1436,6 +1437,7 @@ ss_ctrl ss_ctrl
 
 	.ss_hold(ss_hold),
 	.ss_shift(ss_shift),
+	.ss_sel(ss_sel),
 	.ss_in(ss_in),
 	.ss_out(ss_out),
 	.ss_refresh(ss_refresh),

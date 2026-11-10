@@ -6,6 +6,9 @@
 #include "Vtb___024root.h"
 #include "Vtb_tb.h"
 #include "verilated.h"
+#if VM_TRACE
+#include "verilated_vcd_c.h"
+#endif
 
 #include <cstdio>
 #include <cstdlib>
@@ -52,11 +55,26 @@ struct Sim {
 	std::unique_ptr<Vtb> top;
 	uint64_t t = 0;      // emulated (normal) cycles since reset release
 	uint64_t ticks = 0;
+#if VM_TRACE
+	// debug builds (--trace): VCD=file VCD_FROM=t VCD_TO=t dumps that window of cycles
+	std::unique_ptr<VerilatedVcdC> vcd;
+	uint64_t vcd_from = 0, vcd_to = 0;
+#endif
 
 	Sim()
 	{
 		ctx.reset(new VerilatedContext);
 		top.reset(new Vtb(ctx.get()));
+#if VM_TRACE
+		if (getenv("VCD")) {
+			ctx->traceEverOn(true);
+			vcd.reset(new VerilatedVcdC);
+			top->trace(vcd.get(), 99);
+			vcd->open(getenv("VCD"));
+			vcd_from = strtoull(getenv("VCD_FROM"), 0, 0);
+			vcd_to = strtoull(getenv("VCD_TO"), 0, 0);
+		}
+#endif
 		top->reset = 1;
 		for (int i = 0; i < 2000; i++) tick();
 		top->reset = 0;
@@ -67,6 +85,10 @@ struct Sim {
 		top->clk = 0; top->eval();
 		top->clk = 1; top->eval();
 		ticks++;
+#if VM_TRACE
+		if (vcd && t >= vcd_from && t < vcd_to) vcd->dump(ticks * 2);
+		if (vcd && t == vcd_to) vcd->flush();
+#endif
 	}
 
 	uint32_t sig() const

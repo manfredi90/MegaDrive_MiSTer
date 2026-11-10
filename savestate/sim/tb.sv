@@ -217,7 +217,12 @@ always @(posedge clk) begin
 end
 
 reg [15:0] rom[0:65535];
+`ifdef SMS
+// Master System mode: smsrom.hex has each byte twice, read on the low byte lane
+initial $readmemh("smsrom.hex", rom);
+`else
 initial $readmemh("testrom.hex", rom);
+`endif
 
 wire [22:0] cart_address;
 wire        cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time, cart_dma;
@@ -227,6 +232,9 @@ wire  [6:0] PC_o, PC_d;
 
 assign cart_busy = cart_cs | cart_oe | cart_lwr | cart_uwr | cart_time;
 assign dbg_cart = {cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time};
+`ifdef SMS
+assign dbg_m68k_addr = cart_address;
+`endif
 
 `ifndef MD_CORE
 `define MD_CORE md_core
@@ -264,7 +272,11 @@ assign dbg_cart = {cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time};
 	.ram_z80_wren(ram_z80_wren),
 	.ram_z80_o(ram_z80[ram_z80_a]),
 
+`ifdef SMS
+	.m68k_addr(),
+`else
 	.m68k_addr(dbg_m68k_addr),
+`endif
 	.m68k_bus_do(m68k_bus_do),
 	.m68k_genie_data(m68k_bus_do),
 	.z80_addr(),
@@ -275,7 +287,11 @@ assign dbg_cart = {cart_cs, cart_oe, cart_lwr, cart_uwr, cart_time};
 	.tmss_data(16'h0),
 	.tmss_address(),
 
+	`ifdef SMS
+	.M3(1'b0),
+`else
 	.M3(1'b1),
+`endif
 	.cart_address(cart_address),
 	.cart_data(rom[cart_address[15:0]]),
 	.cart_data_en(cart_oe & cart_cs),

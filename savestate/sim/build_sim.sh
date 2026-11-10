@@ -3,6 +3,7 @@
 #   rtl  obj_rtl: plain RTL (no scan chain)
 #   lib  obj_lib: the generated scan netlist as a protected library (slow, ~6 GB RAM, once)
 #   ss   obj_ss:  testbench linked against obj_lib (fast to rebuild)
+# Debug variants by hand: -DSMS (Master System mode, smsprog.asm), --trace (VCD=, VCD_FROM=, VCD_TO=)
 set -e
 cd "$(dirname "$0")"
 R=../../rtl

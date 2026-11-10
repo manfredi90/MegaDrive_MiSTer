@@ -13,3 +13,6 @@ obj_ss_old/
 obj_late/
 obj_late_old/
 obj_bad/
+obj_sms_rtl/
+obj_sms_ss/
+smsprog.bin

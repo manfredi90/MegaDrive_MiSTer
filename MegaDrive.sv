@@ -1266,6 +1266,8 @@ wire downloading = cart_download;
 
 reg bk_ena = 0;
 reg sav_pending = 0;
+wire ss_loaded;
+reg [2:0] ss_loaded_s = 0;
 wire bk_change;
 
 always @(posedge clk_sys) begin
@@ -1279,7 +1281,10 @@ always @(posedge clk_sys) begin
 	if(downloading && img_mounted && !img_readonly) bk_ena <= 1;
 
 	old_change <= bk_change;
-	if (~old_change & bk_change & ~OSD_STATUS) sav_pending <= 1;
+	// a loaded savestate brings back its own cartridge RAM: the save file must follow
+	ss_loaded_s <= {ss_loaded_s[1:0], ss_loaded};
+	if (ss_loaded_s[2] ^ ss_loaded_s[1]) sav_pending <= 1;
+	else if (~old_change & bk_change & ~OSD_STATUS) sav_pending <= 1;
 	else if (bk_state) sav_pending <= 0;
 end
 
@@ -1434,6 +1439,7 @@ ss_ctrl ss_ctrl
 	.allow(rom_loaded & ~svp_or_pier),
 	.safe(ss_safe),
 	.busy(ss_busy),
+	.loaded(ss_loaded),
 
 	.ss_hold(ss_hold),
 	.ss_shift(ss_shift),

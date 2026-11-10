@@ -37,6 +37,7 @@ module ss_ctrl
 	input             safe,         // the core may be frozen at the next clock edge
 
 	output            busy,
+	output reg        loaded = 0,   // toggles after every completed load
 
 	// md_core
 	output reg        ss_hold,
@@ -300,6 +301,7 @@ always @(posedge clk) begin
 
 		S_RELEASE: begin
 			ss_hold <= 0;
+			if(~saving) loaded <= ~loaded;
 			state   <= S_IDLE;
 		end
 

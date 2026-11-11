@@ -123,6 +123,16 @@ jobs:
           docker run --rm -v "$PWD":/build -w /build theypsilon/quartus-lite-c5:17.0.2.docker0 \
             /opt/intelFPGA_lite/quartus/bin/quartus_sta -t worst.tcl 2>&1 | grep "^PATH" || true
 
+      # ALMs and registers of the top entities, to see where the area goes
+      - name: Area by entity
+        if: always()
+        shell: bash
+        run: |
+          awk '/; Fitter Resource Utilization by Entity/ {f = 1}
+            f && /Compilation Hierarchy Node/ {print "AREA " substr($0, 1, 300)}
+            f && /^; *\|/ {split($0, c, ";"); if (match(c[2], /\|/) <= 11) print "AREA " substr($0, 1, 300)}
+            f && /^$/ {if (++e > 1) exit}' output_files/MegaDrive.fit.rpt 2>/dev/null | head -60 || true
+
       # errors and the end of the log on the run page
       - name: Log
         if: always()

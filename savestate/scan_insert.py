@@ -195,9 +195,10 @@ def main():
         return g[0]
 
     # Quartus primitive: a Cyclone V register with its clock enable and synchronous load
-    def sync_load(cname, clk, en, d, q, sdata):
-        new_cells[f'$ss_ff{cname}'] = {
-            'hide_name': 1, 'type': 'dffeas',
+    def sync_load(clk, en, d, q, sdata):
+        # named after the register bit, so that the timing reports stay readable
+        new_cells['ssff_' + named[q][0].lstrip('\\')] = {
+            'hide_name': 0, 'type': 'dffeas',
             'parameters': {'power_up': 'high' if init.get(q) == '1' else 'low'},
             'attributes': {},
             'port_directions': {p: 'input' for p in
@@ -261,7 +262,7 @@ def main():
             keep = [i for i in range(len(pq)) if prev[pq[i]] == pd[i]]
             for i in range(len(pq)):
                 if prev[pq[i]] != pd[i]:
-                    sync_load(f'{name}_ss{k}_{i}', clk, en, pd[i], pq[i], prev[pq[i]])
+                    sync_load(clk, en, pd[i], pq[i], prev[pq[i]])
             if len(keep) < len(pq):
                 piece['connections']['D'] = [pd[i] for i in keep]
                 piece['connections']['Q'] = [pq[i] for i in keep]

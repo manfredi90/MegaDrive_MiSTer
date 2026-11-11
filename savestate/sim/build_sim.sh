@@ -19,7 +19,7 @@ if [ $what = rtl ] || [ $what = all ]; then
 fi
 if [ $what = lib ] || [ $what = all ] || [ ! -f obj_lib/libmd_core_pl.a ]; then
 	verilator $W --x-assign 0 --x-initial 0 -O3 --cc --build -j 1 -CFLAGS -O2 --protect-lib md_core_pl \
-		--top-module md_core -Mdir obj_lib $R/md_core_ss.v $N/m68k_microrom.v vram_ip_model.v
+		--top-module md_core -Mdir obj_lib $R/md_core_ss.v $N/m68k_microrom.v vram_ip_model.v dffeas_model.v
 fi
 if [ $what = ss ] || [ $what = lib ] || [ $what = all ]; then
 	verilator $FLAGS -DMD_CORE=md_core_pl -Mdir obj_ss -o sim tb.sv sim_main.cpp $R/ss_ctrl.sv $R/ss_ddr.sv -I$R \

@@ -4,11 +4,14 @@
 Every flip-flop gets   D' = ss_sel ? <previous chain bit> : D
                        EN' = ss_shift | (~ss_hold & EN)      (EN = 1 for a plain $dff)
 so while ss_hold is high the whole board is frozen and with ss_shift it becomes one long
-shift register from ss_in to ss_out. ss_sel only changes while the board is frozen and
-not shifting (ss_ctrl keeps it steady for two clocks around every shift and release), so
-the muxes get two-clock timing and the single-clock ss_shift only feeds the enables. Freezing through the register's clock enable costs
-no logic in front of each flip-flop (Cyclone V registers have a hardware enable); only the
-shift mux is added. The netlist must keep its clock enables ($dffe, dffunmap -srst-only).
+shift register from ss_in to ss_out. Both cost no logic in front of the flip-flop: the
+freeze goes through the register's hardware clock enable, and the shift mux is the
+register's synchronous load (a dffeas primitive with sload = ss_sel, asdata = previous
+bit), which Cyclone V has in every register with a LAB-wide sload. As a LUT, the mux took
+about 4,800 ALMs and one logic level on the critical paths. ss_sel only changes while the
+board is frozen and not shifting (ss_ctrl keeps it steady for two clocks around every
+shift and release), so it gets two-clock timing; the single-clock ss_shift only feeds the
+enables. The netlist must keep its clock enables ($dffe, dffunmap -srst-only).
 Bits whose net name starts with "ssx_" belong to the savestate logic itself (memory
 access) and are left untouched.
 
@@ -191,6 +194,20 @@ def main():
         g[1] += width
         return g[0]
 
+    # Quartus primitive: a Cyclone V register with its clock enable and synchronous load
+    def sync_load(cname, clk, en, d, q, sdata):
+        new_cells[f'$ss_ff{cname}'] = {
+            'hide_name': 1, 'type': 'dffeas',
+            'parameters': {'power_up': 'high' if init.get(q) == '1' else 'low'},
+            'attributes': {},
+            'port_directions': {p: 'input' for p in
+                                ('d', 'clk', 'ena', 'asdata', 'sload', 'clrn', 'prn', 'aload', 'sclr')} | {'q': 'output'},
+            'connections': {'d': [d], 'clk': [clk], 'ena': [en], 'asdata': [sdata], 'sload': [ss_sel],
+                            'clrn': ['1'], 'prn': ['1'], 'aload': ['0'], 'sclr': ['0'], 'q': [q]},
+        }
+        sload_bits.add(q)
+
+    dead, sload_bits = set(), set()
     split = muxes = 0
     for name in sorted(n for n, c in cells.items() if c['type'] in FF):
         cell = cells[name]
@@ -213,25 +230,11 @@ def main():
         d = cell['connections']['D']
         q = cell['connections']['Q']
         w = len(q)
-        need = [i for i in range(w) if prev[q[i]] != d[i]]
-        m = list(d)
-        if need:
-            y = new_bits(len(need))
-            new_cells[f'$ss_shift{name}'] = {
-                'hide_name': 1, 'type': '$mux',
-                'parameters': {'WIDTH': format(len(need), '032b')},
-                'attributes': {},
-                'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
-                'connections': {'A': [d[i] for i in need], 'B': [prev[q[i]] for i in need],
-                                'S': [ss_sel], 'Y': y},
-            }
-            for i, yb in zip(need, y):
-                m[i] = yb
-            muxes += len(need)
+        clk = cell['connections']['CLK'][0]
+        muxes += sum(1 for i in range(w) if prev[q[i]] != d[i])
         orig_type = cell['type']
         cell['type'] = '$dffe'
         cell['port_directions']['EN'] = 'input'
-        cell['connections']['D'] = m
         # wide registers are cut into pieces of at most EN_GROUP bits, each on its own enable
         pieces = [cell]
         if w > EN_GROUP:
@@ -245,14 +248,41 @@ def main():
                 if k:
                     new_cells[f'{name}_ss{k // EN_GROUP}'] = piece
             cells[name] = pieces[0]
-        for piece in pieces:
+        for k, piece in enumerate(pieces):
             piece['type'] = orig_type
-            piece['connections']['EN'] = [enable(piece, len(piece['connections']['Q']))]
+            en = enable(piece, len(piece['connections']['Q']))
+            piece['connections']['EN'] = [en]
             piece['type'] = '$dffe'
             piece['parameters']['EN_POLARITY'] = format(1, '032b')
+            # the bits that need a shift mux become single registers that take the previous
+            # chain bit through their synchronous load (sload = ss_sel, asdata), so the mux
+            # costs no LUT and no logic level in front of the flip-flop
+            pd, pq = piece['connections']['D'], piece['connections']['Q']
+            keep = [i for i in range(len(pq)) if prev[pq[i]] == pd[i]]
+            for i in range(len(pq)):
+                if prev[pq[i]] != pd[i]:
+                    sync_load(f'{name}_ss{k}_{i}', clk, en, pd[i], pq[i], prev[pq[i]])
+            if len(keep) < len(pq):
+                piece['connections']['D'] = [pd[i] for i in keep]
+                piece['connections']['Q'] = [pq[i] for i in keep]
+                piece['parameters']['WIDTH'] = format(len(keep), '032b')
+            if not keep:
+                dead.add(id(piece))
     cells.update(new_cells)
+    for name in [n for n, c in cells.items() if id(c) in dead]:
+        del cells[name]
+    # their power-up value is now the power_up parameter
+    for net in nets.values():
+        iv = net.get('attributes', {}).get('init')
+        if iv is not None and len(iv) == len(net['bits']):
+            w = len(iv)
+            iv = ''.join('x' if net['bits'][w - 1 - j] in sload_bits else iv[j] for j in range(w))
+            if set(iv) == {'x'}:
+                del net['attributes']['init']
+            else:
+                net['attributes']['init'] = iv
     print(f'clock enables: {len(actives)} distinct + 1 in {n_en} groups, {split} registers split, '
-          f'{muxes} shift muxes, {len(segments)} chain segments + {cycles} rings')
+          f'{muxes} shift muxes (sync load), {len(segments)} chain segments + {cycles} rings')
 
     # ss_out: drive from the end of the chain (the RTL ties it to ss_in)
     out = new_bits(1)

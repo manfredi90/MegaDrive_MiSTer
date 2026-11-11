@@ -5,6 +5,11 @@ name: build
 on:
   push:
   workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Fitter seed (empty: the one in MegaDrive.qsf)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -16,6 +21,14 @@ jobs:
     timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
+
+      # at ~92% of the ALMs the timing result depends on the placement: a run started by hand
+      # can try another fitter seed, and its artifacts are named after it
+      - name: Fitter seed
+        if: inputs.seed != ''
+        run: |
+          sed -i 's/^set_global_assignment -name SEED .*/set_global_assignment -name SEED ${{ inputs.seed }}/' MegaDrive.qsf
+          grep -n "name SEED" MegaDrive.qsf
 
       - name: Free disk space for the Quartus image
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -122,14 +135,14 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MegaDrive_SS_sd
+          name: MegaDrive_SS_sd${{ inputs.seed != '' && format('_seed{0}', inputs.seed) || '' }}
           path: sd/
           include-hidden-files: true
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: reports
+          name: reports${{ inputs.seed != '' && format('_seed{0}', inputs.seed) || '' }}
           path: |
             output_files/*.summary
             output_files/MegaDrive.sta.rpt

@@ -147,19 +147,47 @@ jobs:
           git ls-files --error-unmatch savestate/layouts/$(cat $d/maps/current).map.gz > /dev/null 2>&1 ||
             echo "::warning::layout map $(cat $d/maps/current) is not committed: add it to savestate/layouts"
 
+      # the artifact service fails now and then: one more try after a pause
       - uses: actions/upload-artifact@v4
+        id: up1
+        continue-on-error: true
         with:
           name: MegaDrive_SS_sd_seed${{ matrix.seed }}
           path: sd/
           include-hidden-files: true
           retention-days: 5
 
-      # uploaded after the package, so that every seed in the pick has one
+      - if: steps.up1.outcome == 'failure'
+        run: sleep 30
+
       - uses: actions/upload-artifact@v4
+        if: steps.up1.outcome == 'failure'
+        with:
+          name: MegaDrive_SS_sd_seed${{ matrix.seed }}
+          path: sd/
+          include-hidden-files: true
+          retention-days: 5
+          overwrite: true
+
+      # uploaded after the package, so that every seed in the pick has one (with one more try too)
+      - uses: actions/upload-artifact@v4
+        id: up2
+        continue-on-error: true
         with:
           name: timing_seed${{ matrix.seed }}
           path: timing/
           retention-days: 5
+
+      - if: steps.up2.outcome == 'failure'
+        run: sleep 30
+
+      - uses: actions/upload-artifact@v4
+        if: steps.up2.outcome == 'failure'
+        with:
+          name: timing_seed${{ matrix.seed }}
+          path: timing/
+          retention-days: 5
+          overwrite: true
 
       - uses: actions/upload-artifact@v4
         if: always()

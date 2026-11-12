@@ -416,6 +416,8 @@ wire  [3:0] ss_mem_sel;
 wire [15:0] ss_mem_addr;
 wire [63:0] ss_mem_wdata, ss_core_rdata;
 wire        ss_sram = ss_mem_act & (ss_mem_sel == 4'd8);
+wire        ss_ram68 = ss_mem_act & (ss_mem_sel == 4'd6);
+wire        ss_ramz = ss_mem_act & (ss_mem_sel == 4'd7);
 wire  [3:0] ss_cart_idx;
 wire [63:0] ss_cart_rdata, ss_cart_wdata;
 wire        ss_cart_we;
@@ -480,11 +482,11 @@ wire [14:0] ram_68k_address;
 wire  [1:0] ram_68k_byteena;
 wire [15:0] ram_68k_data;
 wire        ram_68k_wren;
-wire [15:0] ram_68k_o;
+wire [15:0] ram_68k_o, ss_ram68_q;
 wire [12:0] ram_z80_address;
 wire  [7:0] ram_z80_data;
 wire        ram_z80_wren;
-wire  [7:0] ram_z80_o;
+wire  [7:0] ram_z80_o, ss_ramz_q;
 wire [15:0] tmss_data;
 wire  [9:0] tmss_address;
 
@@ -543,10 +545,12 @@ md_core md_core
 	.ram_68k_data(ram_68k_data),
 	.ram_68k_wren(ram_68k_wren),
 	.ram_68k_o(ram_68k_o),
+	.ss_ram68_q(ss_ram68_q),
 	.ram_z80_address(ram_z80_address),
 	.ram_z80_data(ram_z80_data),
 	.ram_z80_wren(ram_z80_wren),
 	.ram_z80_o(ram_z80_o),
+	.ss_ramz_q(ss_ramz_q),
 
 	// cheat engine
 	.m68k_addr(m68k_addr),
@@ -629,8 +633,11 @@ dpram #(15,16) ram_68k
 	.byteena_a(ram_68k_byteena),
 	.q_a(ram_68k_o),
 
-	.address_b(ram_rst_a),
-	.wren_b(md_reset)
+	// second port: clear on reset, savestate access while the core is held
+	.address_b(md_reset ? ram_rst_a : ss_mem_addr[14:0]),
+	.data_b(md_reset ? 16'h0000 : ss_mem_wdata[15:0]),
+	.wren_b(md_reset | (ss_ram68 & ss_mem_we)),
+	.q_b(ss_ram68_q)
 );
 
 dpram #(13,8) ram_z80k
@@ -642,9 +649,10 @@ dpram #(13,8) ram_z80k
 	.wren_a(ram_z80_wren),
 	.q_a(ram_z80_o),
 
-	.address_b(ram_rst_a),
-	.wren_b(md_reset),
-	.data_b(8'hC7) // reset instruction to fix Titan 2 bug
+	.address_b(md_reset ? ram_rst_a[13:1] : ss_mem_addr[12:0]),
+	.wren_b(md_reset | (ss_ramz & ss_mem_we)),
+	.data_b(md_reset ? 8'hC7 : ss_mem_wdata[7:0]), // reset instruction to fix Titan 2 bug
+	.q_b(ss_ramz_q)
 );
 
 dpram_difclk #(10,16,10,16) rom_tmss

@@ -51,10 +51,12 @@ module md_board
 	output [15:0] ram_68k_data,
 	output ram_68k_wren,
 	input [15:0] ram_68k_o,
+	input [15:0] ss_ram68_q,     // savestate: second port of the 68k RAM
 	output [12:0] ram_z80_address,
 	output [7:0] ram_z80_data,
 	output ram_z80_wren,
 	input [7:0] ram_z80_o,
+	input [7:0] ss_ramz_q,       // savestate: second port of the Z80 RAM
 	
 	// cart
 	input M3,
@@ -328,8 +330,8 @@ module md_board
 	begin
 		ssx_sel1 <= ss_mem_sel;
 		ssx_sel2 <= ssx_sel1;
-		ssx_ram68_q <= ram_68k_o;
-		ssx_ramz_q <= ram_z80_o;
+		ssx_ram68_q <= ss_ram68_q;
+		ssx_ramz_q <= ss_ramz_q;
 	end
 	
 	always @(*)
@@ -737,8 +739,6 @@ module md_board
 	reg [14:0] ss_ram68_a = 15'h0;
 	reg [12:0] ss_ramz_a = 13'h0;
 	reg [9:0] ss_tmss_a = 10'h0;
-	wire ss_ram68 = ss_mem_act & (ss_mem_sel == 4'd6);
-	wire ss_ramz = ss_mem_act & (ss_mem_sel == 4'd7);
 	
 	always @(posedge MCLK2)
 	begin
@@ -747,14 +747,16 @@ module md_board
 		ss_tmss_a <= tmss_address_fn;
 	end
 	
-	assign ram_68k_address = ss_ram68 ? ss_mem_addr[14:0] : ss_refresh ? ss_ram68_a : ram_68k_address_fn;
-	assign ram_68k_byteena = ss_ram68 ? 2'b11 : { ~UWR, ~LWR };
-	assign ram_68k_data = ss_ram68 ? ss_mem_wdata[15:0] : VD;
-	assign ram_68k_wren = ss_ram68 ? ss_mem_we : ((~UWR | ~LWR) & ~RAS0 & ~ss_hold);
+	// the savestate reads and writes these RAMs through their second port (MegaDrive.sv),
+	// so only the address replay is muxed into the first one
+	assign ram_68k_address = ss_refresh ? ss_ram68_a : ram_68k_address_fn;
+	assign ram_68k_byteena = { ~UWR, ~LWR };
+	assign ram_68k_data = VD;
+	assign ram_68k_wren = (~UWR | ~LWR) & ~RAS0 & ~ss_hold;
 	
-	assign ram_z80_address = ss_ramz ? ss_mem_addr[12:0] : ss_refresh ? ss_ramz_a : ram_z80_address_fn;
-	assign ram_z80_data = ss_ramz ? ss_mem_wdata[7:0] : ZD;
-	assign ram_z80_wren = ss_ramz ? ss_mem_we : (~ZRAM & ~ZWR & ~ss_hold);
+	assign ram_z80_address = ss_refresh ? ss_ramz_a : ram_z80_address_fn;
+	assign ram_z80_data = ZD;
+	assign ram_z80_wren = ~ZRAM & ~ZWR & ~ss_hold;
 	
 	assign tmss_address = ss_refresh ? ss_tmss_a : tmss_address_fn;
 	

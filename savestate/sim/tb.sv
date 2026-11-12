@@ -199,21 +199,26 @@ wire  [1:0] ram_68k_byteena;
 wire [15:0] ram_68k_data;
 wire        ram_68k_wren;
 reg  [15:0] ram_68k[0:32767] /*verilator public*/;
-reg  [14:0] ram_68k_a;
+reg  [14:0] ram_68k_a, ram_68k_b;
 always @(posedge clk) begin
 	if(ram_68k_wren & ram_68k_byteena[0]) ram_68k[ram_68k_address][7:0]  <= ram_68k_data[7:0];
 	if(ram_68k_wren & ram_68k_byteena[1]) ram_68k[ram_68k_address][15:8] <= ram_68k_data[15:8];
 	ram_68k_a <= ram_68k_address;
+	// second port: savestate access (MegaDrive.sv)
+	if(core_act & (core_sel == 4'd6) & core_we) ram_68k[core_addr[14:0]] <= core_wdata[15:0];
+	ram_68k_b <= core_addr[14:0];
 end
 
 wire [12:0] ram_z80_address;
 wire  [7:0] ram_z80_data;
 wire        ram_z80_wren;
 reg   [7:0] ram_z80[0:8191] /*verilator public*/;
-reg  [12:0] ram_z80_a;
+reg  [12:0] ram_z80_a, ram_z80_b;
 always @(posedge clk) begin
 	if(ram_z80_wren) ram_z80[ram_z80_address] <= ram_z80_data;
 	ram_z80_a <= ram_z80_address;
+	if(core_act & (core_sel == 4'd7) & core_we) ram_z80[core_addr[12:0]] <= core_wdata[7:0];
+	ram_z80_b <= core_addr[12:0];
 end
 
 reg [15:0] rom[0:65535];
@@ -267,10 +272,12 @@ assign dbg_m68k_addr = cart_address;
 	.ram_68k_data(ram_68k_data),
 	.ram_68k_wren(ram_68k_wren),
 	.ram_68k_o(ram_68k[ram_68k_a]),
+	.ss_ram68_q(ram_68k[ram_68k_b]),
 	.ram_z80_address(ram_z80_address),
 	.ram_z80_data(ram_z80_data),
 	.ram_z80_wren(ram_z80_wren),
 	.ram_z80_o(ram_z80[ram_z80_a]),
+	.ss_ramz_q(ram_z80[ram_z80_b]),
 
 `ifdef SMS
 	.m68k_addr(),

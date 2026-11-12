@@ -37,7 +37,6 @@ memory_collect
 memory_share
 opt_clean
 chtype -map \$__ss_dm_dff \$dff -map \$__ss_dm_dffe \$dffe
-dffunmap -srst-only
 opt_clean
 check
 write_json $tmp/flat.json

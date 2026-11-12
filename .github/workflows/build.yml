@@ -68,6 +68,15 @@ jobs:
           status timing "$(grep -oE "Worst-case (setup|hold) slack is -?[0-9.]+" build.log | sed 's/Worst-case //; s/ slack is//' | tr '\n' ' ')"
           exit $(cat build.rc)
 
+      - name: Area by entity
+        if: always()
+        shell: bash
+        run: |
+          awk '/; Fitter Resource Utilization by Entity/ {f = 1}
+            f && /Compilation Hierarchy Node/ {print "AREA " substr($0, 1, 300)}
+            f && /^; *\|/ {split($0, c, ";"); if (match(c[2], /\|/) <= 9) print "AREA " substr($0, 1, 300)}
+            f && /^$/ {if (++e > 1) exit}' output_files/MegaDrive.fit.rpt 2>/dev/null | head -120 || true
+
       # errors and the end of the log on the run page
       - name: Log
         if: always()

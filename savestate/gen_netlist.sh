@@ -49,7 +49,7 @@ EOF
 yosys -q -l "$tmp/flat.log" "$tmp/flat.ys" > /dev/null 2>&1 || { tail -20 "$tmp/flat.log"; exit 1; }
 grep "^Warning" "$tmp/flat.log" | sed 's/ See .*//' | sort | uniq -c | sort -rn | head -5
 # EXPERIMENT: no scan chain, area of the Yosys round trip only
-cp "$tmp/flat.json" "$tmp/scan.json"
+python3 savestate/noscan_rename.py "$tmp/flat.json" "$tmp/scan.json"
 printf "localparam SS_CHAIN_LEN = 16620;\nlocalparam [31:0] SS_LAYOUT_HASH = 32'h0;\n" > "$OUT/md_core_ss.vh"
 yosys -q -l "$tmp/out.log" "$tmp/out.ys" > /dev/null 2>&1 || { tail -20 "$tmp/out.log"; exit 1; }
 {

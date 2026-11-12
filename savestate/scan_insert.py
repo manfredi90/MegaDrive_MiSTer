@@ -99,13 +99,12 @@ def main():
 
     # register attributes from the RTL that Quartus must still see (upstream timing fixes):
     # dont_retime keeps the register where it is, dont_merge keeps a register copy apart
-    QATTR = {'dont_retime': '-name DONT_RETIME ON', 'dont_merge': '-name DONT_MERGE_REGISTER ON'}
-    qattr = {}
+    # (Verilog attributes on a reg; these registers stay plain regs with a LUT shift mux)
+    QATTR = ('dont_retime', 'dont_merge')
+    qattr = set()
     for net in nets.values():
-        a = [QATTR[k] for k in QATTR if k in net.get('attributes', {})]
-        for b in net['bits']:
-            if a and isinstance(b, int):
-                qattr[b] = '; '.join(a)
+        if any(k in net.get('attributes', {}) for k in QATTR):
+            qattr.update(b for b in net['bits'] if isinstance(b, int))
 
     named = {}
     dsrc = {}
@@ -211,7 +210,7 @@ def main():
         new_cells['ssff_' + named[q][0].lstrip('\\')] = {
             'hide_name': 0, 'type': 'dffeas',
             'parameters': {'power_up': 'high' if init.get(q) == '1' else 'low'},
-            'attributes': {'altera_attribute': qattr[q]} if q in qattr else {},
+            'attributes': {},
             'port_directions': {p: 'input' for p in
                                 ('d', 'clk', 'ena', 'asdata', 'sload', 'clrn', 'prn', 'aload', 'sclr')} | {'q': 'output'},
             'connections': {'d': [d], 'clk': [clk], 'ena': [en], 'asdata': [sdata], 'sload': [ss_sel],
@@ -269,11 +268,24 @@ def main():
             # the bits that need a shift mux become single registers that take the previous
             # chain bit through their synchronous load (sload = ss_sel, asdata), so the mux
             # costs no LUT and no logic level in front of the flip-flop
-            pd, pq = piece['connections']['D'], piece['connections']['Q']
-            keep = [i for i in range(len(pq)) if prev[pq[i]] == pd[i]]
+            pd, pq = list(piece['connections']['D']), piece['connections']['Q']
+            keep = [i for i in range(len(pq)) if prev[pq[i]] == pd[i] or pq[i] in qattr]
             for i in range(len(pq)):
-                if prev[pq[i]] != pd[i]:
+                if prev[pq[i]] == pd[i]:
+                    continue
+                if pq[i] in qattr:
+                    y = new_bits(1)
+                    new_cells[f'$ss_shift{name}_{k}_{i}'] = {
+                        'hide_name': 1, 'type': '$mux',
+                        'parameters': {'WIDTH': format(1, '032b')},
+                        'attributes': {},
+                        'port_directions': {'A': 'input', 'B': 'input', 'S': 'input', 'Y': 'output'},
+                        'connections': {'A': [pd[i]], 'B': [prev[pq[i]]], 'S': [ss_sel], 'Y': y},
+                    }
+                    pd[i] = y[0]
+                else:
                     sync_load(clk, en, pd[i], pq[i], prev[pq[i]])
+            piece['connections']['D'] = pd
             if len(keep) < len(pq):
                 piece['connections']['D'] = [pd[i] for i in keep]
                 piece['connections']['Q'] = [pq[i] for i in keep]
@@ -334,14 +346,12 @@ def main():
         if isinstance(memid, str) and memid.startswith('\\'):
             c['parameters']['MEMID'] = '\\' + clean(memid[1:])
 
-    # the netlist is written with attributes: keep only the power-up values and the Quartus
-    # register attributes (on the reg for the plain registers, on the dffeas cells)
+    # the netlist is written with attributes: keep only the power-up values and the
+    # register attributes above
     for net in mod['netnames'].values():
-        at = net.get('attributes', {})
-        q = '; '.join(QATTR[k] for k in QATTR if k in at)
-        net['attributes'] = {k: v for k, v in at.items() if k == 'init'} | ({'altera_attribute': q} if q else {})
+        net['attributes'] = {k: v for k, v in net.get('attributes', {}).items() if k == 'init' or k in QATTR}
     for c in mod['cells'].values():
-        c['attributes'] = {k: v for k, v in c.get('attributes', {}).items() if k == 'altera_attribute'}
+        c['attributes'] = {}
     for m in design['modules'].values():
         m['attributes'] = {k: v for k, v in m.get('attributes', {}).items() if k in ('blackbox', 'top')}
     json.dump(design, open(dst, 'w'))

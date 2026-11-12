@@ -32,7 +32,6 @@ select -set dm a:dont_merge %ci1 t:\$dff t:\$dffe %u %i
 chtype -map \$dff \$__ss_dm_dff -map \$dffe \$__ss_dm_dffe @dm
 flatten
 opt_clean
-opt -fast
 memory_collect
 memory_share
 opt_clean

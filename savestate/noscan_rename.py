@@ -20,4 +20,13 @@ for c in mod['cells'].values():
     memid = c.get('parameters', {}).get('MEMID')
     if isinstance(memid, str) and memid.startswith('\\'):
         c['parameters']['MEMID'] = '\\' + clean(memid[1:])
+QATTR = {'dont_retime': '-name DONT_RETIME ON', 'dont_merge': '-name DONT_MERGE_REGISTER ON'}
+for net in mod['netnames'].values():
+    at = net.get('attributes', {})
+    q = '; '.join(QATTR[k] for k in QATTR if k in at)
+    net['attributes'] = {k: v for k, v in at.items() if k == 'init'} | ({'altera_attribute': q} if q else {})
+for c in mod['cells'].values():
+    c['attributes'] = {}
+for m in design['modules'].values():
+    m['attributes'] = {k: v for k, v in m.get('attributes', {}).items() if k in ('blackbox', 'top')}
 json.dump(design, open(sys.argv[2], 'w'))

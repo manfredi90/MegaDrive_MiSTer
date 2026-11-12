@@ -97,6 +97,16 @@ def main():
             if iv is not None and b not in init and len(iv) == w:
                 init[b] = iv[w - 1 - i]
 
+    # register attributes from the RTL that Quartus must still see (upstream timing fixes):
+    # dont_retime keeps the register where it is, dont_merge keeps a register copy apart
+    QATTR = {'dont_retime': '-name DONT_RETIME ON', 'dont_merge': '-name DONT_MERGE_REGISTER ON'}
+    qattr = {}
+    for net in nets.values():
+        a = [QATTR[k] for k in QATTR if k in net.get('attributes', {})]
+        for b in net['bits']:
+            if a and isinstance(b, int):
+                qattr[b] = '; '.join(a)
+
     named = {}
     dsrc = {}
     for cname, cell in cells.items():
@@ -201,7 +211,7 @@ def main():
         new_cells['ssff_' + named[q][0].lstrip('\\')] = {
             'hide_name': 0, 'type': 'dffeas',
             'parameters': {'power_up': 'high' if init.get(q) == '1' else 'low'},
-            'attributes': {},
+            'attributes': {'altera_attribute': qattr[q]} if q in qattr else {},
             'port_directions': {p: 'input' for p in
                                 ('d', 'clk', 'ena', 'asdata', 'sload', 'clrn', 'prn', 'aload', 'sclr')} | {'q': 'output'},
             'connections': {'d': [d], 'clk': [clk], 'ena': [en], 'asdata': [sdata], 'sload': [ss_sel],
@@ -324,6 +334,16 @@ def main():
         if isinstance(memid, str) and memid.startswith('\\'):
             c['parameters']['MEMID'] = '\\' + clean(memid[1:])
 
+    # the netlist is written with attributes: keep only the power-up values and the Quartus
+    # register attributes (on the reg for the plain registers, on the dffeas cells)
+    for net in mod['netnames'].values():
+        at = net.get('attributes', {})
+        q = '; '.join(QATTR[k] for k in QATTR if k in at)
+        net['attributes'] = {k: v for k, v in at.items() if k == 'init'} | ({'altera_attribute': q} if q else {})
+    for c in mod['cells'].values():
+        c['attributes'] = {k: v for k, v in c.get('attributes', {}).items() if k == 'altera_attribute'}
+    for m in design['modules'].values():
+        m['attributes'] = {k: v for k, v in m.get('attributes', {}).items() if k in ('blackbox', 'top')}
     json.dump(design, open(dst, 'w'))
 
     lines = ['mdss-layout 1', f'chain {length}']

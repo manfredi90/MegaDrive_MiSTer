@@ -132,6 +132,9 @@ jobs:
             f && /Compilation Hierarchy Node/ {print "AREA " substr($0, 1, 300)}
             f && /^; *\|/ {split($0, c, ";"); if (match(c[2], /\|/) <= 9) print "AREA " substr($0, 1, 300)}
             f && /^$/ {if (++e > 1) exit}' output_files/MegaDrive.fit.rpt 2>/dev/null | head -120 || true
+          # ALUT/ALM/register breakdown of the whole design
+          awk '/^; Fitter Resource Usage Summary/ {f = 1} f {print "RES " $0} f && /^$/ {exit}' \
+            output_files/MegaDrive.fit.rpt 2>/dev/null | head -90 || true
 
       # errors and the end of the log on the run page
       - name: Log

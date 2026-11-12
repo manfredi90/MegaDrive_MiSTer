@@ -64,6 +64,6 @@ yosys -q -l "$tmp/out.log" "$tmp/out.ys" > /dev/null 2>&1 || { tail -20 "$tmp/ou
 	# inside escaped names, so make every escaped name a plain identifier. The scan-chain
 	# clock enables (ss_en_*) must stay separate LUTs: Quartus would merge the identical ones.
 	# Of the attributes only altera_attribute and parallel_case mean something to Quartus.
-	python3 -c 'import re,sys; v=re.sub(r"\\(\S+)\s", lambda m: "esc_" + re.sub(r"\W", "_", m.group(1)) + " ", sys.stdin.read()); v=re.sub(r"(?m)^ *\(\* (init|unused_bits|top) = .*\*\)\n", "", v); sys.stdout.write(re.sub(r"(wire ss_en_\d+);", r"\1 /* synthesis keep */;", v))' < "$tmp/md_core_ss.v"
+	python3 -c 'import re,sys; v=re.sub(r"\\(\S+)\s", lambda m: "esc_" + re.sub(r"\W", "_", m.group(1)) + " ", sys.stdin.read()); v=re.sub(r"(?m)^ *\(\* (init|unused_bits|top) = .*\*\)\n", "", v); v=re.sub(r"\(\* (dont_retime|dont_merge) = [^*]*\*\)", r"(* \1 *)", v); sys.stdout.write(re.sub(r"(wire ss_en_\d+);", r"\1 /* synthesis keep */;", v))' < "$tmp/md_core_ss.v"
 } > "$OUT/md_core_ss.v"
 echo "wrote $OUT/md_core_ss.v ($(wc -c < "$OUT/md_core_ss.v") bytes)"

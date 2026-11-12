@@ -23,8 +23,7 @@ for c in mod['cells'].values():
 QATTR = {'dont_retime': '-name DONT_RETIME ON', 'dont_merge': '-name DONT_MERGE_REGISTER ON'}
 for net in mod['netnames'].values():
     at = net.get('attributes', {})
-    q = '; '.join(QATTR[k] for k in QATTR if k in at)
-    net['attributes'] = {k: v for k, v in at.items() if k == 'init'} | ({'altera_attribute': q} if q else {})
+    net['attributes'] = {k: v for k, v in at.items() if k == 'init' or k in QATTR}
 for c in mod['cells'].values():
     c['attributes'] = {}
 for m in design['modules'].values():

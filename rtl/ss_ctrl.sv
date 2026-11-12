@@ -116,8 +116,9 @@ reg        ss_in_r;
 assign busy  = (state != S_IDLE);
 assign ss_in = saving ? ss_out : ss_in_r;   // saving rotates the chain once around
 
-wire [63:0] ent_val = (mem_epw(mem_i) == 8) ? {56'd0, buf_w[ent_in_word[2:0]*8 +: 8]} :
-                      (mem_epw(mem_i) == 4) ? {48'd0, buf_w[ent_in_word[1:0]*16 +: 16]} : buf_w;
+// buf_w is a shift register (LSB first): no bit or byte index muxes on it
+wire [63:0] ent_val = (mem_epw(mem_i) == 8) ? {56'd0, buf_w[7:0]} :
+                      (mem_epw(mem_i) == 4) ? {48'd0, buf_w[15:0]} : buf_w;
 
 task ddr_rd(input [28:0] addr, input [3:0] ret);
 begin
@@ -211,17 +212,26 @@ always @(posedge clk) begin
 
 		// up to 64 chain bits per word, one per clock. ss_shift is registered: bit n
 		// shifts at the edge after the one that requested it, and is captured there.
+		// buf_w shifts right; a short last word is padded out to 64 shifts when saving,
+		// so its bits end up at the bottom like the others.
 		S_CHAIN: begin
 			if(bit_cnt == 64 || !chain_left) begin
-				if(~ss_shift) state <= S_POST;
+				if(~ss_shift) begin
+					if(saving && bit_cnt != 64) begin
+						buf_w   <= buf_w >> 1;
+						bit_cnt <= bit_cnt + 1'd1;
+					end
+					else state <= S_POST;
+				end
 			end
 			else begin
 				ss_shift   <= 1;
-				ss_in_r    <= buf_w[bit_cnt[5:0]];
+				ss_in_r    <= buf_w[0];
+				if(~saving) buf_w <= buf_w >> 1;
 				bit_cnt    <= bit_cnt + 1'd1;
 				chain_left <= chain_left - 1'd1;
 			end
-			if(saving & ss_shift) buf_w[bit_cnt[5:0] - 1'd1] <= ss_out;
+			if(saving & ss_shift) buf_w <= {ss_out, buf_w[63:1]};
 		end
 
 		// memory entries, 8 clocks each (16 for the cartridge RAM on clk_sys). MegaDrive.sdc
@@ -239,11 +249,16 @@ always @(posedge clk) begin
 				step <= 0;
 				if(saving) begin
 					case(mem_epw(mem_i))
-						8: buf_w[ent_in_word[2:0]*8 +: 8]   <= mem_q[7:0];
-						4: buf_w[ent_in_word[1:0]*16 +: 16] <= mem_q[15:0];
+						8: buf_w <= {mem_q[7:0], buf_w[63:8]};
+						4: buf_w <= {mem_q[15:0], buf_w[63:16]};
 						default: buf_w <= mem_q;
 					endcase
 				end
+				else case(mem_epw(mem_i))
+					8: buf_w <= buf_w >> 8;
+					4: buf_w <= buf_w >> 16;
+					default: ;
+				endcase
 				ent_in_word <= ent_in_word + 1'd1;
 				if(ent + 1'd1 == mem_cnt(mem_i)) begin
 					ent   <= 0;

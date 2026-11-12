@@ -41,8 +41,12 @@ module vram
 	// savestate: the RAM blocks register their address internally, ss_row keeps a copy
 	// so the read output can be rebuilt after a restore.
 	reg [7:0] ss_row = 8'h0;
-	reg [7:0] ssx_bsel;
-	wire [7:0] slice_sel = ss_mem_en ? ssx_bsel : addr[7:0];
+	// byte select of the read mux: a copy of addr[7:0] (loaded with it, and from it while
+	// held, so it is right again after a restore) that takes the savestate address during
+	// a memory access, so the read path has no savestate mux in it. Not scanned, but with
+	// single-clock timing like the rest of the read path (ssy_, see scan_insert.py).
+	reg [7:0] ssy_bsel = 8'h0;
+	wire [7:0] slice_sel = ssy_bsel;
 	
 	wire [7:0] mem_addr = ss_mem_en ? ss_mem_addr[15:8] : ss_refresh ? ss_row : addr[15:8];
 	wire [31:0] mem_be;
@@ -85,7 +89,12 @@ module vram
 	
 	always @(posedge MCLK)
 	begin
-		ssx_bsel <= ss_mem_addr[7:0];
+		if (ss_mem_en)
+			ssy_bsel <= ss_mem_addr[7:0];
+		else if (ss_hold)
+			ssy_bsel <= addr[7:0];
+		else if (~o_cas & cas)
+			ssy_bsel <= AD;
 		ssx_vram_rdata <= slice_p[slice_sel];
 	end
 	

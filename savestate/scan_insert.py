@@ -7,13 +7,14 @@ so while ss_hold is high the whole board is frozen and with ss_shift it becomes 
 shift register from ss_in to ss_out. Both cost no logic in front of the flip-flop: the
 freeze goes through the register's hardware clock enable, and the shift mux is the
 register's synchronous load (a dffeas primitive with sload = ss_sel, asdata = previous
-bit), which Cyclone V has in every register with a LAB-wide sload. As a LUT, the mux took
-about 4,800 ALMs and one logic level on the critical paths. ss_sel only changes while the
+bit), which Cyclone V has in every register with a LAB-wide sload. ss_sel only changes while the
 board is frozen and not shifting (ss_ctrl keeps it steady for two clocks around every
 shift and release), so it gets two-clock timing; the single-clock ss_shift only feeds the
 enables. The netlist must keep its clock enables ($dffe, dffunmap -srst-only).
 Bits whose net name starts with "ssx_" belong to the savestate logic itself (memory
-access) and are left untouched.
+access) and are left untouched; MegaDrive.sdc gives their paths two clocks. "ssy_" bits are
+left untouched too but keep single-clock timing: copies of state registers that also serve
+the memory access and are rebuilt from the original while the board is held.
 
 Almost half of the flip-flops take D straight from another flip-flop (the shift registers
 and delay lines of the gate-level chips). The chain follows those links wherever it can,
@@ -58,7 +59,7 @@ def main():
     excluded = set()
     for name, net in nets.items():
         leaf = name.split('.')[-1].lstrip('\\')
-        if leaf.startswith('ssx_'):
+        if leaf.startswith(('ssx_', 'ssy_')):
             excluded.update(b for b in net['bits'] if isinstance(b, int))
 
     def port_bit(name):

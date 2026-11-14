@@ -1,0 +1,9 @@
+{
+ "Scripts/.megadrive_savestates/maps/4013faa5.map.gz": "releases/sd/Scripts/.megadrive_savestates/maps/4013faa5.map.gz",
+ "Scripts/.megadrive_savestates/maps/6a4878fd.map.gz": "releases/sd/Scripts/.megadrive_savestates/maps/6a4878fd.map.gz",
+ "Scripts/.megadrive_savestates/maps/current": "releases/sd/Scripts/.megadrive_savestates/maps/current",
+ "Scripts/.megadrive_savestates/maps/d6b7b40b.map.gz": "releases/sd/Scripts/.megadrive_savestates/maps/d6b7b40b.map.gz",
+ "Scripts/.megadrive_savestates/mdss_convert.py": "releases/sd/Scripts/.megadrive_savestates/mdss_convert.py",
+ "Scripts/megadrive_savestates.sh": "releases/sd/Scripts/megadrive_savestates.sh",
+ "_Console/MegaDrive_SS_20261112.rbf": "releases/MegaDrive_SS_20261112.rbf"
+}
